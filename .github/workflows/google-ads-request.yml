@@ -1,0 +1,78 @@
+name: Google Ads Request
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'requests/**.json'
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: 'Path to request JSON'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_ADS_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_ADS_DEVELOPER_TOKEN }}
+      GOOGLE_ADS_CLIENT_ID: ${{ secrets.GOOGLE_ADS_CLIENT_ID }}
+      GOOGLE_ADS_CLIENT_SECRET: ${{ secrets.GOOGLE_ADS_CLIENT_SECRET }}
+      GOOGLE_ADS_REFRESH_TOKEN: ${{ secrets.GOOGLE_ADS_REFRESH_TOKEN }}
+      GOOGLE_ADS_LOGIN_CUSTOMER_ID: ${{ vars.GOOGLE_ADS_LOGIN_CUSTOMER_ID }}
+      GOOGLE_ADS_ALLOWED_CUSTOMER_IDS: ${{ vars.GOOGLE_ADS_ALLOWED_CUSTOMER_IDS }}
+      GOOGLE_ADS_MAX_DAILY_BUDGET_USD: ${{ vars.GOOGLE_ADS_MAX_DAILY_BUDGET_USD }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Resolve request files
+        id: requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            printf '%s\n' "${{ inputs.request_file }}" > /tmp/request-files.txt
+          else
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'requests/*.json' > /tmp/request-files.txt
+          fi
+          cat /tmp/request-files.txt
+          test -s /tmp/request-files.txt
+
+      - name: Execute requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          while IFS= read -r request; do
+            case "$request" in
+              requests/*.json) ;;
+              *) echo "Invalid request path: $request" >&2; exit 2 ;;
+            esac
+            test -f "$request"
+            base="$(basename "$request" .json)"
+            python src/main.py "$request" "results/${base}.result.json"
+          done < /tmp/request-files.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-ads-results-${{ github.run_id }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
