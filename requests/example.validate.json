@@ -1,0 +1,8 @@
+{
+  "operation": "create_app_campaign_draft",
+  "customer_id": "8130408947",
+  "name": "Dot Connect - Install Test",
+  "app_id": "REPLACE_WITH_ANDROID_PACKAGE_NAME",
+  "daily_budget_usd": 10,
+  "validate_only": true
+}
