@@ -1,0 +1,8 @@
+{
+  "operation": "upload_media_assets",
+  "customer_id": "8130408947",
+  "asset_name_prefix": "Dot Connect Phase 1",
+  "image_paths": ["media/dot-connect/package/dot-connect/images/*.png"],
+  "video_paths": ["media/dot-connect/package/dot-connect/videos/*.mp4"],
+  "dry_run": false
+}
