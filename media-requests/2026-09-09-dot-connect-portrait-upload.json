@@ -1,0 +1,9 @@
+{
+  "operation": "upload_media_assets",
+  "package_file": "Portrait images.zip",
+  "customer_id": "8130408947",
+  "asset_name_prefix": "Dot Connect | Portrait Creative 2026-09-09",
+  "image_paths": ["media/dot-connect/package/**/*.png"],
+  "video_paths": [],
+  "dry_run": false
+}
