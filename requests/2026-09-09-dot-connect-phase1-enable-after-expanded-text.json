@@ -1,0 +1,7 @@
+{
+  "operation": "set_campaign_status",
+  "customer_id": "8130408947",
+  "campaign_resource_name": "customers/8130408947/campaigns/24233136440",
+  "status": "ENABLED",
+  "validate_only": false
+}
