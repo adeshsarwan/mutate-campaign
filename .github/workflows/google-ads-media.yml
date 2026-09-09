@@ -76,7 +76,7 @@ jobs:
             BASENAME="$(basename "$REQUEST" .json)"
             OPERATION="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["operation"])' "$REQUEST")"
             case "$OPERATION" in
-              inspect_app_campaign_assets|attach_app_campaign_assets)
+              inspect_app_campaign_assets|attach_app_campaign_assets|create_replacement_app_ad_group)
                 python src/creative_attach.py "$REQUEST" "results/${BASENAME}.result.json"
                 ;;
               *)
