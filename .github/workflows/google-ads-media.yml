@@ -1,0 +1,79 @@
+name: Google Ads Media
+
+on:
+  push:
+    paths:
+      - 'media-requests/**.json'
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: 'Path to a media request JSON file'
+        required: true
+        type: string
+
+jobs:
+  media:
+    runs-on: ubuntu-latest
+    environment: google.env
+    env:
+      GOOGLE_ADS_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_ADS_DEVELOPER_TOKEN }}
+      GOOGLE_ADS_CLIENT_ID: ${{ secrets.GOOGLE_ADS_CLIENT_ID }}
+      GOOGLE_ADS_CLIENT_SECRET: ${{ secrets.GOOGLE_ADS_CLIENT_SECRET }}
+      GOOGLE_ADS_REFRESH_TOKEN: ${{ secrets.GOOGLE_ADS_REFRESH_TOKEN }}
+      GOOGLE_ADS_LOGIN_CUSTOMER_ID: ${{ vars.GOOGLE_ADS_LOGIN_CUSTOMER_ID }}
+      GOOGLE_ADS_ALLOWED_CUSTOMER_IDS: ${{ vars.GOOGLE_ADS_ALLOWED_CUSTOMER_IDS }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve media requests
+        id: requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            REQUEST="${{ inputs.request_file }}"
+            case "$REQUEST" in
+              media-requests/*.json) ;;
+              *) echo "request_file must be under media-requests/ and end in .json" >&2; exit 1 ;;
+            esac
+            test -f "$REQUEST"
+            printf '%s\n' "$REQUEST" > /tmp/media-request-files.txt
+          else
+            git diff-tree --no-commit-id --name-only -r "${{ github.sha }}" | grep '^media-requests/.*\.json$' > /tmp/media-request-files.txt || true
+          fi
+          if [ ! -s /tmp/media-request-files.txt ]; then
+            echo "No media request files found."
+            exit 0
+          fi
+          cat /tmp/media-request-files.txt
+
+      - name: Execute media requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s /tmp/media-request-files.txt ]; then
+            exit 0
+          fi
+          while IFS= read -r REQUEST; do
+            BASENAME="$(basename "$REQUEST" .json)"
+            python src/media_upload.py "$REQUEST" "results/${BASENAME}.result.json"
+          done < /tmp/media-request-files.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-ads-media-results-${{ github.run_id }}
+          path: results/
+          if-no-files-found: warn
