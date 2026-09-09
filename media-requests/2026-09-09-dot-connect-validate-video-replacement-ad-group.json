@@ -1,0 +1,32 @@
+{
+  "operation": "create_replacement_app_ad_group",
+  "customer_id": "8130408947",
+  "campaign_id": "24233136440",
+  "old_ad_group_id": "203119348514",
+  "new_ad_group_name": "Dot Connect | Tier 1 | Install Creative 2",
+  "headlines": [
+    "Connect Every Dot",
+    "Relax With Dot Connect",
+    "Solve Color Flow Puzzles",
+    "Play Thousands of Levels"
+  ],
+  "descriptions": [
+    "Connect matching colors, fill the board and enjoy relaxing logic puzzles.",
+    "Challenge your brain with colorful dot puzzles and thousands of levels.",
+    "Play relaxing connect-the-dots puzzles anytime and sharpen your logic skills."
+  ],
+  "image_asset_resource_names": [],
+  "youtube_video_asset_resource_names": [
+    "customers/8130408947/assets/419176922744",
+    "customers/8130408947/assets/419176922747",
+    "customers/8130408947/assets/419176922750",
+    "customers/8130408947/assets/419176922753",
+    "customers/8130408947/assets/419176925318",
+    "customers/8130408947/assets/419360238900",
+    "customers/8130408947/assets/419360274720",
+    "customers/8130408947/assets/419360287422",
+    "customers/8130408947/assets/419360287425",
+    "customers/8130408947/assets/419360310048"
+  ],
+  "validate_only": true
+}
