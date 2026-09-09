@@ -32,10 +32,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f dot-connect.zip
+          if [ -f dotconnect-mania-approved-google-ads.zip ]; then
+            PACKAGE=dotconnect-mania-approved-google-ads.zip
+          else
+            PACKAGE=dot-connect.zip
+          fi
+          test -f "$PACKAGE"
           rm -rf media/dot-connect
           mkdir -p media/dot-connect/package
-          unzip -q dot-connect.zip -d media/dot-connect/package
+          unzip -q "$PACKAGE" -d media/dot-connect/package
+          echo "Using package: $PACKAGE"
           echo "Extracted files:"
           find media/dot-connect/package -type f | sort
 
