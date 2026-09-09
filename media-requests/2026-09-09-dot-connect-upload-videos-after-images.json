@@ -4,5 +4,6 @@
   "image_paths": [],
   "video_paths": ["media/dot-connect/package/dot-connect/videos/*.mp4"],
   "asset_name_prefix": "Dot Connect | Phase 1",
-  "dry_run": false
+  "dry_run": false,
+  "retry_note": "in-process-v25-uploader-fix"
 }
