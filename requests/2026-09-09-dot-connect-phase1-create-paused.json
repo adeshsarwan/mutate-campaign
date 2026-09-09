@@ -1,0 +1,30 @@
+{
+  "operation": "create_app_campaign_draft",
+  "customer_id": "8130408947",
+  "name": "Dot Connect | Tier 1 | Installs | Phase 1",
+  "app_id": "com.gp.ds.flowdotconnectmania",
+  "daily_budget_amount": 150000,
+  "currency": "IDR",
+  "optimization_goal_event": "first_open",
+  "target_locations": [
+    "United States",
+    "United Kingdom",
+    "Canada",
+    "Australia",
+    "New Zealand"
+  ],
+  "target_language": "English",
+  "ad_group_name": "Dot Connect | Tier 1 | Install Creative 1",
+  "headlines": [
+    "Connect Every Dot",
+    "Relax With Dot Connect",
+    "Solve Color Flow Puzzles",
+    "Play Thousands of Levels"
+  ],
+  "descriptions": [
+    "Connect matching colors, fill the board and enjoy relaxing logic puzzles.",
+    "Challenge your brain with colorful dot puzzles and thousands of levels.",
+    "Play relaxing connect-the-dots puzzles anytime and sharpen your logic skills."
+  ],
+  "validate_only": false
+}
