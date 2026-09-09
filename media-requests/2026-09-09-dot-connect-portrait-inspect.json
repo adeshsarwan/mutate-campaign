@@ -1,0 +1,6 @@
+{
+  "operation": "inspect_repo_media",
+  "package_file": "Portrait images.zip",
+  "image_paths": ["media/dot-connect/package/**/*.png"],
+  "video_paths": []
+}
