@@ -89,7 +89,6 @@ def write_currency_guard(client: GoogleAdsClient, customer_id: str) -> tuple[str
 
     limit_raw = os.environ.get("GOOGLE_ADS_MAX_DAILY_BUDGET", "").strip()
     if not limit_raw:
-        # Backward compatibility is allowed only for actual USD accounts.
         legacy = os.environ.get("GOOGLE_ADS_MAX_DAILY_BUDGET_USD", "").strip()
         if actual == "USD" and legacy:
             limit_raw = legacy
@@ -268,33 +267,25 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
     validate_only = bool(request.get("validate_only", True))
 
     budget_service = client.get_service("CampaignBudgetService")
-    budget_op = client.get_type("CampaignBudgetOperation")
+    campaign_service = client.get_service("CampaignService")
+    google_ads_service = client.get_service("GoogleAdsService")
+
+    budget_resource = budget_service.campaign_budget_path(cid, -1)
+    campaign_resource = campaign_service.campaign_path(cid, -2)
+
+    budget_mutate = client.get_type("MutateOperation")
+    budget_op = budget_mutate.campaign_budget_operation
     budget = budget_op.create
+    budget.resource_name = budget_resource
     budget.name = f"{request['name']} budget"
     budget.amount_micros = amount_to_micros(daily_budget_amount)
     budget.explicitly_shared = False
     budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
-    budget_response = budget_service.mutate_campaign_budgets(
-        customer_id=cid, operations=[budget_op], validate_only=validate_only
-    )
-    if validate_only:
-        return {
-            "validated": True,
-            "created": False,
-            "operation": "create_app_campaign_draft",
-            "customer_id": cid,
-            "name": request["name"],
-            "app_id": request["app_id"],
-            "daily_budget_amount": daily_budget_amount,
-            "currency": currency,
-            "status": "PAUSED",
-            "note": "Budget validated. Re-submit with validate_only=false to create resources.",
-        }
 
-    budget_resource = budget_response.results[0].resource_name
-    campaign_service = client.get_service("CampaignService")
-    campaign_op = client.get_type("CampaignOperation")
+    campaign_mutate = client.get_type("MutateOperation")
+    campaign_op = campaign_mutate.campaign_operation
     campaign = campaign_op.create
+    campaign.resource_name = campaign_resource
     campaign.name = request["name"]
     campaign.status = client.enums.CampaignStatusEnum.PAUSED
     campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.MULTI_CHANNEL
@@ -316,14 +307,36 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
         campaign.app_campaign_setting.bidding_strategy_goal_type = client.enums.AppCampaignBiddingStrategyGoalTypeEnum.OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST
         campaign.maximize_conversions = client.get_type("MaximizeConversions")
 
-    response = campaign_service.mutate_campaigns(customer_id=cid, operations=[campaign_op])
+    mutate_request = client.get_type("MutateGoogleAdsRequest")
+    mutate_request.customer_id = cid
+    mutate_request.mutate_operations.extend([budget_mutate, campaign_mutate])
+    mutate_request.partial_failure = False
+    mutate_request.validate_only = validate_only
+    response = google_ads_service.mutate(request=mutate_request)
+
+    if validate_only:
+        return {
+            "validated": True,
+            "created": False,
+            "operation": "create_app_campaign_draft",
+            "customer_id": cid,
+            "name": request["name"],
+            "app_id": request["app_id"],
+            "daily_budget_amount": daily_budget_amount,
+            "currency": currency,
+            "status": "PAUSED",
+            "note": "Budget and campaign core validated atomically. No Google Ads resources were created.",
+        }
+
+    created_budget = response.mutate_operation_responses[0].campaign_budget_result.resource_name
+    created_campaign = response.mutate_operation_responses[1].campaign_result.resource_name
     return {
         "validated": False,
         "created": True,
         "customer_id": cid,
         "currency": currency,
-        "campaign_resource_name": response.results[0].resource_name,
-        "budget_resource_name": budget_resource,
+        "campaign_resource_name": created_campaign,
+        "budget_resource_name": created_budget,
         "status": "PAUSED",
     }
 
@@ -339,7 +352,11 @@ def update_campaign_daily_budget(client: GoogleAdsClient, request: dict[str, Any
     op.update.resource_name = request["budget_resource_name"]
     op.update.amount_micros = amount_to_micros(amount)
     op.update_mask.CopyFrom(protobuf_helpers.field_mask(None, op.update._pb))
-    service.mutate_campaign_budgets(customer_id=cid, operations=[op], validate_only=validate_only)
+    mutate_request = client.get_type("MutateCampaignBudgetsRequest")
+    mutate_request.customer_id = cid
+    mutate_request.operations.append(op)
+    mutate_request.validate_only = validate_only
+    service.mutate_campaign_budgets(request=mutate_request)
     return {"validated": validate_only, "daily_budget_amount": amount, "currency": currency}
 
 
@@ -355,7 +372,11 @@ def set_campaign_status(client: GoogleAdsClient, request: dict[str, Any]) -> dic
     op.update.resource_name = request["campaign_resource_name"]
     op.update.status = getattr(client.enums.CampaignStatusEnum, status)
     op.update_mask.CopyFrom(protobuf_helpers.field_mask(None, op.update._pb))
-    service.mutate_campaigns(customer_id=cid, operations=[op], validate_only=validate_only)
+    mutate_request = client.get_type("MutateCampaignsRequest")
+    mutate_request.customer_id = cid
+    mutate_request.operations.append(op)
+    mutate_request.validate_only = validate_only
+    service.mutate_campaigns(request=mutate_request)
     return {"validated": validate_only, "status": status, "currency_guard": currency}
 
 
