@@ -67,20 +67,63 @@ def list_accessible_customers(client: GoogleAdsClient, request: dict[str, Any]) 
     return {"customers": [x.replace("customers/", "") for x in response.resource_names]}
 
 
+def account_preflight(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
+    cid = clean_id(request["customer_id"])
+    service = client.get_service("GoogleAdsService")
+
+    customer_rows = list(service.search(customer_id=cid, query="""
+        SELECT customer.id, customer.descriptive_name, customer.currency_code,
+               customer.time_zone, customer.manager, customer.test_account
+        FROM customer
+        LIMIT 1
+    """))
+    customer = customer_rows[0].customer if customer_rows else None
+
+    conversion_rows = service.search(customer_id=cid, query="""
+        SELECT conversion_action.id, conversion_action.name, conversion_action.status,
+               conversion_action.type, conversion_action.category,
+               conversion_action.primary_for_goal,
+               conversion_action.include_in_conversions_metric,
+               conversion_action.value_settings.default_value,
+               conversion_action.value_settings.always_use_default_value
+        FROM conversion_action
+        ORDER BY conversion_action.id
+    """)
+    conversions = []
+    for row in conversion_rows:
+        ca = row.conversion_action
+        conversions.append({
+            "id": str(ca.id),
+            "name": ca.name,
+            "status": ca.status.name,
+            "type": ca.type_.name,
+            "category": ca.category.name,
+            "primary_for_goal": bool(ca.primary_for_goal),
+            "include_in_conversions_metric": bool(ca.include_in_conversions_metric),
+            "default_value": float(ca.value_settings.default_value),
+            "always_use_default_value": bool(ca.value_settings.always_use_default_value),
+        })
+
+    return {
+        "customer": None if customer is None else {
+            "id": str(customer.id),
+            "name": customer.descriptive_name,
+            "currency": customer.currency_code,
+            "time_zone": customer.time_zone,
+            "manager": bool(customer.manager),
+            "test_account": bool(customer.test_account),
+        },
+        "conversion_actions": conversions,
+    }
+
+
 def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
     cid = clean_id(request["customer_id"])
     days = int(request.get("days", 30))
     query = f"""
-        SELECT
-          campaign.id,
-          campaign.name,
-          campaign.status,
-          campaign.advertising_channel_type,
-          metrics.cost_micros,
-          metrics.conversions,
-          metrics.conversions_value,
-          metrics.all_conversions,
-          metrics.all_conversions_value
+        SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type,
+               metrics.cost_micros, metrics.conversions, metrics.conversions_value,
+               metrics.all_conversions, metrics.all_conversions_value
         FROM campaign
         WHERE segments.date DURING LAST_{days}_DAYS
         ORDER BY metrics.cost_micros DESC
@@ -89,10 +132,8 @@ def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[st
     out = []
     for row in rows:
         out.append({
-            "campaign_id": str(row.campaign.id),
-            "name": row.campaign.name,
-            "status": row.campaign.status.name,
-            "channel": row.campaign.advertising_channel_type.name,
+            "campaign_id": str(row.campaign.id), "name": row.campaign.name,
+            "status": row.campaign.status.name, "channel": row.campaign.advertising_channel_type.name,
             "cost_usd": row.metrics.cost_micros / 1_000_000,
             "conversions": float(row.metrics.conversions),
             "conversion_value": float(row.metrics.conversions_value),
@@ -107,37 +148,19 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
     daily_budget_usd = float(request["daily_budget_usd"])
     check_budget_limit(daily_budget_usd)
     validate_only = bool(request.get("validate_only", True))
-
     budget_service = client.get_service("CampaignBudgetService")
     budget_op = client.get_type("CampaignBudgetOperation")
     budget = budget_op.create
     budget.name = f"{request['name']} budget"
     budget.amount_micros = usd_to_micros(daily_budget_usd)
     budget.explicitly_shared = False
-    budget_delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
-    budget.delivery_method = budget_delivery_method
-
-    budget_response = budget_service.mutate_campaign_budgets(
-        customer_id=cid,
-        operations=[budget_op],
-        validate_only=validate_only,
-    )
-
+    budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+    budget_response = budget_service.mutate_campaign_budgets(customer_id=cid, operations=[budget_op], validate_only=validate_only)
     if validate_only:
-        return {
-            "validated": True,
-            "created": False,
-            "operation": "create_app_campaign_draft",
-            "customer_id": cid,
-            "name": request["name"],
-            "app_id": request["app_id"],
-            "daily_budget_usd": daily_budget_usd,
-            "status": "PAUSED",
-            "note": "Budget validated. Re-submit with validate_only=false to create resources.",
-        }
-
+        return {"validated": True, "created": False, "operation": "create_app_campaign_draft", "customer_id": cid,
+                "name": request["name"], "app_id": request["app_id"], "daily_budget_usd": daily_budget_usd,
+                "status": "PAUSED", "note": "Budget validated. Re-submit with validate_only=false to create resources."}
     budget_resource = budget_response.results[0].resource_name
-
     campaign_service = client.get_service("CampaignService")
     campaign_op = client.get_type("CampaignOperation")
     campaign = campaign_op.create
@@ -146,33 +169,19 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
     campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.MULTI_CHANNEL
     campaign.advertising_channel_sub_type = client.enums.AdvertisingChannelSubTypeEnum.APP_CAMPAIGN
     campaign.campaign_budget = budget_resource
-    campaign.contains_eu_political_advertising = (
-        client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
-    )
+    campaign.contains_eu_political_advertising = client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
     campaign.app_campaign_setting.app_id = request["app_id"]
     campaign.app_campaign_setting.app_store = client.enums.AppCampaignAppStoreEnum.GOOGLE_APP_STORE
-
     target_cpa_usd = request.get("target_cpa_usd")
     if target_cpa_usd is not None:
-        campaign.app_campaign_setting.bidding_strategy_goal_type = (
-            client.enums.AppCampaignBiddingStrategyGoalTypeEnum.OPTIMIZE_INSTALLS_TARGET_INSTALL_COST
-        )
+        campaign.app_campaign_setting.bidding_strategy_goal_type = client.enums.AppCampaignBiddingStrategyGoalTypeEnum.OPTIMIZE_INSTALLS_TARGET_INSTALL_COST
         campaign.target_cpa.target_cpa_micros = usd_to_micros(float(target_cpa_usd))
     else:
-        campaign.app_campaign_setting.bidding_strategy_goal_type = (
-            client.enums.AppCampaignBiddingStrategyGoalTypeEnum.OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST
-        )
+        campaign.app_campaign_setting.bidding_strategy_goal_type = client.enums.AppCampaignBiddingStrategyGoalTypeEnum.OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST
         campaign.maximize_conversions = client.get_type("MaximizeConversions")
-
     response = campaign_service.mutate_campaigns(customer_id=cid, operations=[campaign_op])
-    return {
-        "validated": False,
-        "created": True,
-        "customer_id": cid,
-        "campaign_resource_name": response.results[0].resource_name,
-        "budget_resource_name": budget_resource,
-        "status": "PAUSED",
-    }
+    return {"validated": False, "created": True, "customer_id": cid,
+            "campaign_resource_name": response.results[0].resource_name, "budget_resource_name": budget_resource, "status": "PAUSED"}
 
 
 def update_campaign_daily_budget(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
@@ -180,7 +189,6 @@ def update_campaign_daily_budget(client: GoogleAdsClient, request: dict[str, Any
     daily_budget_usd = float(request["daily_budget_usd"])
     check_budget_limit(daily_budget_usd)
     validate_only = bool(request.get("validate_only", True))
-
     service = client.get_service("CampaignBudgetService")
     op = client.get_type("CampaignBudgetOperation")
     op.update.resource_name = request["budget_resource_name"]
@@ -196,7 +204,6 @@ def set_campaign_status(client: GoogleAdsClient, request: dict[str, Any]) -> dic
     if status not in {"PAUSED", "ENABLED"}:
         raise RuntimeError("status must be PAUSED or ENABLED")
     validate_only = bool(request.get("validate_only", True))
-
     service = client.get_service("CampaignService")
     op = client.get_type("CampaignOperation")
     op.update.resource_name = request["campaign_resource_name"]
@@ -208,6 +215,7 @@ def set_campaign_status(client: GoogleAdsClient, request: dict[str, Any]) -> dic
 
 OPERATIONS = {
     "list_accessible_customers": list_accessible_customers,
+    "account_preflight": account_preflight,
     "campaign_report": campaign_report,
     "create_app_campaign_draft": create_app_campaign_draft,
     "update_campaign_daily_budget": update_campaign_daily_budget,
@@ -218,25 +226,17 @@ OPERATIONS = {
 def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit("Usage: python src/main.py REQUEST_JSON RESULT_JSON")
-    request_path = Path(sys.argv[1])
-    result_path = Path(sys.argv[2])
-    request = json.loads(request_path.read_text())
-    operation = request.get("operation")
+    request_path = Path(sys.argv[1]); result_path = Path(sys.argv[2])
+    request = json.loads(request_path.read_text()); operation = request.get("operation")
     if operation not in OPERATIONS:
         raise RuntimeError(f"Unsupported operation: {operation}")
-
     client = load_client()
     try:
         result = {"ok": True, "operation": operation, "result": OPERATIONS[operation](client, request)}
     except Exception as exc:
         result = {"ok": False, "operation": operation, "error": str(exc)}
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_text(json.dumps(result, indent=2))
-        raise
-
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps(result, indent=2))
-    print(json.dumps(result, indent=2))
+        result_path.parent.mkdir(parents=True, exist_ok=True); result_path.write_text(json.dumps(result, indent=2)); raise
+    result_path.parent.mkdir(parents=True, exist_ok=True); result_path.write_text(json.dumps(result, indent=2)); print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
