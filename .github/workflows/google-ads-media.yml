@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Extract Dot Connect media package
         shell: bash
@@ -61,7 +61,7 @@ jobs:
             test -f "$REQUEST"
             printf '%s\n' "$REQUEST" > /tmp/media-request-files.txt
           else
-            git show --pretty='' --name-only "${{ github.sha }}" | grep '^media-requests/.*\.json$' > /tmp/media-request-files.txt || true
+            git diff-tree --no-commit-id --name-only -r "${{ github.sha }}" | grep '^media-requests/.*\.json$' > /tmp/media-request-files.txt || true
           fi
           if [ ! -s /tmp/media-request-files.txt ]; then
             echo "No media request files found."
