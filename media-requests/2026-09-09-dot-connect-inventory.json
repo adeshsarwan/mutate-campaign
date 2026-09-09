@@ -1,0 +1,6 @@
+{
+  "operation": "inspect_repo_media",
+  "customer_id": "8130408947",
+  "image_paths": ["media/dot-connect/package/**/*.png"],
+  "video_paths": ["media/dot-connect/package/**/*.mp4"]
+}
