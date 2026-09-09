@@ -47,7 +47,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Resolve media requests
-        id: requests
         shell: bash
         run: |
           set -euo pipefail
@@ -75,7 +74,15 @@ jobs:
           set -euo pipefail
           while IFS= read -r REQUEST; do
             BASENAME="$(basename "$REQUEST" .json)"
-            python src/media_upload.py "$REQUEST" "results/${BASENAME}.result.json"
+            OPERATION="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["operation"])' "$REQUEST")"
+            case "$OPERATION" in
+              inspect_app_campaign_assets|attach_app_campaign_assets)
+                python src/creative_attach.py "$REQUEST" "results/${BASENAME}.result.json"
+                ;;
+              *)
+                python src/media_upload.py "$REQUEST" "results/${BASENAME}.result.json"
+                ;;
+            esac
           done < /tmp/media-request-files.txt
 
       - name: Upload results
