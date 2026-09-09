@@ -1,0 +1,40 @@
+{
+  "operation": "create_replacement_app_ad_group",
+  "customer_id": "8130408947",
+  "campaign_id": "24233136440",
+  "old_ad_group_id": "202747379729",
+  "new_ad_group_name": "Dot Connect | Tier 1 | Images + Portrait + Expanded Text",
+  "headlines": [
+    "Connect Every Dot",
+    "Relax With Dot Connect",
+    "Solve Color Flow Puzzles",
+    "Play Thousands of Levels",
+    "Train Your Brain With Dots"
+  ],
+  "descriptions": [
+    "Connect matching colors, fill the board and enjoy relaxing logic puzzles.",
+    "Challenge your brain with colorful dot puzzles and thousands of levels.",
+    "Play relaxing connect-the-dots puzzles anytime and sharpen your logic skills.",
+    "Match colorful dots, solve clever puzzles and keep your mind sharp with every level.",
+    "Relax, connect matching colors and challenge your brain with satisfying dot puzzles."
+  ],
+  "image_asset_resource_names": [
+    "customers/8130408947/assets/419389522725",
+    "customers/8130408947/assets/419389522728",
+    "customers/8130408947/assets/419314039942",
+    "customers/8130408947/assets/419389522731",
+    "customers/8130408947/assets/419389510044",
+    "customers/8130408947/assets/419205585476",
+    "customers/8130408947/assets/419389522734",
+    "customers/8130408947/assets/419389522737",
+    "customers/8130408947/assets/419389522740",
+    "customers/8130408947/assets/419389510047",
+    "customers/8130408947/assets/419209273634",
+    "customers/8130408947/assets/419393038329",
+    "customers/8130408947/assets/419393065215",
+    "customers/8130408947/assets/419317614658",
+    "customers/8130408947/assets/419317616575"
+  ],
+  "youtube_video_asset_resource_names": [],
+  "validate_only": false
+}
