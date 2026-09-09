@@ -1,0 +1,52 @@
+{
+  "operation": "attach_app_campaign_assets",
+  "customer_id": "8130408947",
+  "campaign_id": "24233136440",
+  "ad_group_id": "203119348514",
+  "headlines": [
+    "Connect Every Dot",
+    "Relax With Dot Connect",
+    "Solve Color Flow Puzzles",
+    "Play Thousands of Levels"
+  ],
+  "descriptions": [
+    "Connect matching colors, fill the board and enjoy relaxing logic puzzles.",
+    "Challenge your brain with colorful dot puzzles and thousands of levels.",
+    "Play relaxing connect-the-dots puzzles anytime and sharpen your logic skills."
+  ],
+  "image_asset_resource_names": [
+    "customers/8130408947/assets/419172898574",
+    "customers/8130408947/assets/419172898580",
+    "customers/8130408947/assets/419172912959",
+    "customers/8130408947/assets/419172912971",
+    "customers/8130408947/assets/419172912977",
+    "customers/8130408947/assets/419172912989",
+    "customers/8130408947/assets/419280943036",
+    "customers/8130408947/assets/419280943042",
+    "customers/8130408947/assets/419280943051",
+    "customers/8130408947/assets/419280943066",
+    "customers/8130408947/assets/419280943075",
+    "customers/8130408947/assets/419356307856",
+    "customers/8130408947/assets/419356307862",
+    "customers/8130408947/assets/419356307871",
+    "customers/8130408947/assets/419356307883",
+    "customers/8130408947/assets/419356307892",
+    "customers/8130408947/assets/419356308687",
+    "customers/8130408947/assets/419356308699",
+    "customers/8130408947/assets/419356314003",
+    "customers/8130408947/assets/419356314009"
+  ],
+  "youtube_video_asset_resource_names": [
+    "customers/8130408947/assets/419176922744",
+    "customers/8130408947/assets/419176922747",
+    "customers/8130408947/assets/419176922750",
+    "customers/8130408947/assets/419176922753",
+    "customers/8130408947/assets/419176925318",
+    "customers/8130408947/assets/419360238900",
+    "customers/8130408947/assets/419360274720",
+    "customers/8130408947/assets/419360287422",
+    "customers/8130408947/assets/419360287425",
+    "customers/8130408947/assets/419360310048"
+  ],
+  "validate_only": true
+}
