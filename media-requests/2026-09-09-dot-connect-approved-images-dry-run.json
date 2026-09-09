@@ -2,7 +2,7 @@
   "operation": "upload_media_assets",
   "customer_id": "8130408947",
   "asset_name_prefix": "Dot Connect | Approved Creative 2026-09-09",
-  "image_paths": ["media/dot-connect/package/**/*.png", "media/dot-connect/package/**/*.jpg", "media/dot-connect/package/**/*.jpeg"],
+  "image_paths": ["media/dot-connect/package/dotconnect-mania-approved-google-ads/*.png"],
   "video_paths": [],
   "dry_run": true
 }
