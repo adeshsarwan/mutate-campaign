@@ -1,0 +1,9 @@
+{
+  "operation": "upload_media_assets",
+  "package_file": "videos.zip",
+  "customer_id": "8130408947",
+  "asset_name_prefix": "Dot Connect | Phase 1 Video Creative 2026-09-09",
+  "image_paths": [],
+  "video_paths": ["media/dot-connect/package/videos/*.mp4"],
+  "dry_run": false
+}
