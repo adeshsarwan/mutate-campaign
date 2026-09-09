@@ -1,0 +1,18 @@
+{
+  "operation": "create_app_campaign_draft",
+  "customer_id": "8130408947",
+  "name": "Dot Connect | Tier 1 | Installs | Phase 1",
+  "app_id": "com.gp.ds.flowdotconnectmania",
+  "daily_budget_amount": 150000,
+  "currency": "IDR",
+  "optimization_goal": "first_open",
+  "target_locations": [
+    "United States",
+    "United Kingdom",
+    "Canada",
+    "Australia",
+    "New Zealand"
+  ],
+  "target_language": "English",
+  "validate_only": true
+}
