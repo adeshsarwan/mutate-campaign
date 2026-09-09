@@ -28,23 +28,6 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Extract Dot Connect media package
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f dotconnect-mania-approved-google-ads.zip ]; then
-            PACKAGE=dotconnect-mania-approved-google-ads.zip
-          else
-            PACKAGE=dot-connect.zip
-          fi
-          test -f "$PACKAGE"
-          rm -rf media/dot-connect
-          mkdir -p media/dot-connect/package
-          unzip -q "$PACKAGE" -d media/dot-connect/package
-          echo "Using package: $PACKAGE"
-          echo "Extracted files:"
-          find media/dot-connect/package -type f | sort
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -73,6 +56,27 @@ jobs:
             exit 1
           fi
           cat /tmp/media-request-files.txt
+
+      - name: Extract requested media package
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST="$(head -n 1 /tmp/media-request-files.txt)"
+          PACKAGE="$(python -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("package_file") or "dotconnect-mania-approved-google-ads.zip")' "$REQUEST")"
+          case "$PACKAGE" in
+            *.zip) ;;
+            *) echo "package_file must be a repository ZIP file" >&2; exit 1 ;;
+          esac
+          case "$PACKAGE" in
+            /*|*..*) echo "Unsafe package_file: $PACKAGE" >&2; exit 1 ;;
+          esac
+          test -f "$PACKAGE"
+          rm -rf media/dot-connect
+          mkdir -p media/dot-connect/package
+          unzip -q "$PACKAGE" -d media/dot-connect/package
+          echo "Using package: $PACKAGE"
+          echo "Extracted files:"
+          find media/dot-connect/package -type f | sort
 
       - name: Execute media requests
         shell: bash
