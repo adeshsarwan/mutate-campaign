@@ -2,9 +2,5 @@
   "operation": "inspect_repo_media",
   "package_file": "videos.zip",
   "image_paths": [],
-  "video_paths": [
-    "media/dot-connect/package/**/*.mp4",
-    "media/dot-connect/package/**/*.mov",
-    "media/dot-connect/package/**/*.m4v"
-  ]
+  "video_paths": ["media/dot-connect/package/videos/*.mp4"]
 }
