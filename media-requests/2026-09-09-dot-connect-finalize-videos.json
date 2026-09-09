@@ -1,0 +1,17 @@
+{
+  "operation": "finalize_video_assets",
+  "customer_id": "8130408947",
+  "asset_name_prefix": "Dot Connect | Phase 1",
+  "video_upload_resource_names": [
+    "customers/8130408947/youTubeVideoUploads/7575169747",
+    "customers/8130408947/youTubeVideoUploads/7575437127",
+    "customers/8130408947/youTubeVideoUploads/7575437328",
+    "customers/8130408947/youTubeVideoUploads/7575497804",
+    "customers/8130408947/youTubeVideoUploads/7575437535",
+    "customers/8130408947/youTubeVideoUploads/7575170674",
+    "customers/8130408947/youTubeVideoUploads/7575170878",
+    "customers/8130408947/youTubeVideoUploads/7575171136",
+    "customers/8130408947/youTubeVideoUploads/7575438087",
+    "customers/8130408947/youTubeVideoUploads/7575499037"
+  ]
+}
