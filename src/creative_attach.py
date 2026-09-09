@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from google.ads.googleads.client import GoogleAdsClient
+from google.api_core import protobuf_helpers
 
 
 def clean_id(value: str | int) -> str:
@@ -120,54 +121,71 @@ def inspect_app_campaign_assets(client: GoogleAdsClient, request: dict[str, Any]
     }
 
 
-def attach_app_campaign_assets(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
-    cid = assert_allowed(request["customer_id"])
-    campaign_id = clean_id(request["campaign_id"])
-    ad_group_id = clean_id(request["ad_group_id"])
-    ad_group_resource = client.get_service("AdGroupService").ad_group_path(cid, ad_group_id)
-    ga = client.get_service("GoogleAdsService")
-
-    campaign_rows = list(ga.search(customer_id=cid, query=f"SELECT campaign.status FROM campaign WHERE campaign.id = {campaign_id}"))
-    if not campaign_rows or campaign_rows[0].campaign.status.name != "PAUSED":
-        raise RuntimeError("Safety block: campaign must exist and be PAUSED before replacing creatives.")
-
+def validate_creative_inputs(request: dict[str, Any]) -> tuple[list[str], list[str], list[str], list[str]]:
     headlines = [str(x) for x in request.get("headlines", [])]
     descriptions = [str(x) for x in request.get("descriptions", [])]
     images = [str(x) for x in request.get("image_asset_resource_names", [])][:20]
     videos = [str(x) for x in request.get("youtube_video_asset_resource_names", [])][:20]
     if not headlines or not descriptions:
         raise RuntimeError("At least one headline and one description are required.")
-    if not images and not videos:
-        raise RuntimeError("At least one image or video asset is required.")
     if len(headlines) > 5 or len(descriptions) > 5:
         raise RuntimeError("Maximum 5 headlines and 5 descriptions supported.")
+    if not images and not videos:
+        raise RuntimeError("At least one image or video asset is required.")
+    return headlines, descriptions, images, videos
 
+
+def assert_campaign_paused(client: GoogleAdsClient, cid: str, campaign_id: str) -> None:
+    rows = list(client.get_service("GoogleAdsService").search(
+        customer_id=cid,
+        query=f"SELECT campaign.status FROM campaign WHERE campaign.id = {campaign_id}",
+    ))
+    if not rows or rows[0].campaign.status.name != "PAUSED":
+        raise RuntimeError("Safety block: campaign must exist and be PAUSED before creative changes.")
+
+
+def attach_app_campaign_assets(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
+    """Legacy same-ad-group replacement path. Kept for compatibility only.
+
+    Google Ads limits App campaigns to one App ad per ad group and does not allow
+    removal of this ad type, so callers should normally use
+    create_replacement_app_ad_group instead.
+    """
+    cid = assert_allowed(request["customer_id"])
+    campaign_id = clean_id(request["campaign_id"])
+    ad_group_id = clean_id(request["ad_group_id"])
+    ad_group_resource = client.get_service("AdGroupService").ad_group_path(cid, ad_group_id)
+    ga = client.get_service("GoogleAdsService")
+    assert_campaign_paused(client, cid, campaign_id)
+
+    headlines, descriptions, images, videos = validate_creative_inputs(request)
     existing_rows = list(ga.search(customer_id=cid, query=f"""
         SELECT ad_group_ad.resource_name, ad_group_ad.status
         FROM ad_group_ad
         WHERE ad_group.id = {ad_group_id}
     """))
     existing = [r.ad_group_ad.resource_name for r in existing_rows if r.ad_group_ad.status.name != "REMOVED"]
+    if existing:
+        raise RuntimeError(
+            "This App ad group already contains its one allowed App ad. "
+            "Use operation=create_replacement_app_ad_group to create a new ad group with the replacement creatives."
+        )
 
     service = client.get_service("AdGroupAdService")
-    operations = []
     create_op = client.get_type("AdGroupAdOperation")
     new_ad = create_op.create
     new_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
     new_ad.ad_group = ad_group_resource
     new_ad.ad.app_ad.headlines.extend([text_asset(client, x) for x in headlines])
     new_ad.ad.app_ad.descriptions.extend([text_asset(client, x) for x in descriptions])
-    new_ad.ad.app_ad.images.extend([image_asset(client, x) for x in images])
-    new_ad.ad.app_ad.youtube_videos.extend([video_asset(client, x) for x in videos])
-    operations.append(create_op)
-    for resource_name in existing:
-        remove_op = client.get_type("AdGroupAdOperation")
-        remove_op.remove = resource_name
-        operations.append(remove_op)
+    if images:
+        new_ad.ad.app_ad.images.extend([image_asset(client, x) for x in images])
+    if videos:
+        new_ad.ad.app_ad.youtube_videos.extend([video_asset(client, x) for x in videos])
 
     mutate_request = client.get_type("MutateAdGroupAdsRequest")
     mutate_request.customer_id = cid
-    mutate_request.operations.extend(operations)
+    mutate_request.operations.append(create_op)
     mutate_request.partial_failure = False
     mutate_request.validate_only = bool(request.get("validate_only", True))
     response = service.mutate_ad_group_ads(request=mutate_request)
@@ -182,14 +200,89 @@ def attach_app_campaign_assets(client: GoogleAdsClient, request: dict[str, Any])
         "campaign_status": "PAUSED",
         "image_count": len(images),
         "video_count": len(videos),
-        "removed_old_ads": existing if not request.get("validate_only", True) else [],
         "new_ad_group_ad_resource_name": created_resource,
+    }
+
+
+def create_replacement_app_ad_group(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
+    cid = assert_allowed(request["customer_id"])
+    campaign_id = clean_id(request["campaign_id"])
+    old_ad_group_id = clean_id(request["old_ad_group_id"])
+    assert_campaign_paused(client, cid, campaign_id)
+    headlines, descriptions, images, videos = validate_creative_inputs(request)
+
+    campaign_service = client.get_service("CampaignService")
+    ad_group_service = client.get_service("AdGroupService")
+    google_ads_service = client.get_service("GoogleAdsService")
+    campaign_resource = campaign_service.campaign_path(cid, campaign_id)
+    old_ad_group_resource = ad_group_service.ad_group_path(cid, old_ad_group_id)
+    new_ad_group_resource = ad_group_service.ad_group_path(cid, -1)
+
+    operations = []
+
+    # Create a replacement ad group because App campaigns allow only one App ad per ad group.
+    group_op = client.get_type("MutateOperation")
+    group = group_op.ad_group_operation.create
+    group.resource_name = new_ad_group_resource
+    group.name = str(request.get("new_ad_group_name") or "Dot Connect Phase 1 | Creative Set 2")
+    group.status = client.enums.AdGroupStatusEnum.ENABLED
+    group.campaign = campaign_resource
+    operations.append(group_op)
+
+    ad_op = client.get_type("MutateOperation")
+    ad = ad_op.ad_group_ad_operation.create
+    ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
+    ad.ad_group = new_ad_group_resource
+    ad.ad.app_ad.headlines.extend([text_asset(client, x) for x in headlines])
+    ad.ad.app_ad.descriptions.extend([text_asset(client, x) for x in descriptions])
+    if images:
+        ad.ad.app_ad.images.extend([image_asset(client, x) for x in images])
+    if videos:
+        ad.ad.app_ad.youtube_videos.extend([video_asset(client, x) for x in videos])
+    operations.append(ad_op)
+
+    # Pause the old ad group once the replacement exists. The campaign itself remains PAUSED.
+    pause_op = client.get_type("MutateOperation")
+    pause = pause_op.ad_group_operation.update
+    pause.resource_name = old_ad_group_resource
+    pause.status = client.enums.AdGroupStatusEnum.PAUSED
+    pause_op.ad_group_operation.update_mask.CopyFrom(protobuf_helpers.field_mask(None, pause._pb))
+    operations.append(pause_op)
+
+    mutate_request = client.get_type("MutateGoogleAdsRequest")
+    mutate_request.customer_id = cid
+    mutate_request.mutate_operations.extend(operations)
+    mutate_request.partial_failure = False
+    mutate_request.validate_only = bool(request.get("validate_only", True))
+    response = google_ads_service.mutate(request=mutate_request)
+
+    created_ad_group = ""
+    created_ad = ""
+    if not request.get("validate_only", True):
+        for item in response.mutate_operation_responses:
+            if item.ad_group_result.resource_name and not created_ad_group:
+                created_ad_group = item.ad_group_result.resource_name
+            if item.ad_group_ad_result.resource_name:
+                created_ad = item.ad_group_ad_result.resource_name
+
+    return {
+        "validated": bool(request.get("validate_only", True)),
+        "campaign_id": campaign_id,
+        "campaign_status": "PAUSED",
+        "old_ad_group_id": old_ad_group_id,
+        "new_ad_group_name": str(request.get("new_ad_group_name") or "Dot Connect Phase 1 | Creative Set 2"),
+        "image_count": len(images),
+        "video_count": len(videos),
+        "new_ad_group_resource_name": created_ad_group,
+        "new_ad_group_ad_resource_name": created_ad,
+        "old_ad_group_paused": not bool(request.get("validate_only", True)),
     }
 
 
 OPERATIONS = {
     "inspect_app_campaign_assets": inspect_app_campaign_assets,
     "attach_app_campaign_assets": attach_app_campaign_assets,
+    "create_replacement_app_ad_group": create_replacement_app_ad_group,
 }
 
 
