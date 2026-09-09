@@ -21,12 +21,7 @@ def clean_id(value: str | int) -> str:
 
 
 def load_client() -> GoogleAdsClient:
-    required = [
-        "GOOGLE_ADS_DEVELOPER_TOKEN",
-        "GOOGLE_ADS_CLIENT_ID",
-        "GOOGLE_ADS_CLIENT_SECRET",
-        "GOOGLE_ADS_REFRESH_TOKEN",
-    ]
+    required = ["GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_REFRESH_TOKEN"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         raise RuntimeError(f"Missing secrets: {', '.join(missing)}")
@@ -151,9 +146,21 @@ def upload_image_assets(client: GoogleAdsClient, cid: str, paths: list[Path], pr
     return metadata
 
 
+def patch_v25_video_uploader() -> None:
+    """Work around google-ads 31.4.0 v25 resumable upload helper signature bug."""
+    from google.ads.googleads import errors as googleads_errors
+    from google.ads.googleads.v25.services.services.you_tube_video_upload_service.transports import resumable_upload
+
+    def raise_for_status(response):
+        return googleads_errors.raise_formatted_for_status(response, "v25")
+
+    resumable_upload.raise_formatted_for_status = raise_for_status
+
+
 def upload_videos(client: GoogleAdsClient, cid: str, paths: list[Path], prefix: str) -> list[dict[str, Any]]:
     if not paths:
         return []
+    patch_v25_video_uploader()
     service = client.get_service("YouTubeVideoUploadService")
     results = []
     for index, path in enumerate(paths, start=1):
@@ -164,12 +171,7 @@ def upload_videos(client: GoogleAdsClient, cid: str, paths: list[Path], prefix: 
         request.you_tube_video_upload.video_privacy = client.enums.YouTubeVideoPrivacyEnum.UNLISTED
         with path.open("rb") as stream:
             response = service.create_you_tube_video_upload(stream=stream, request=request, retry=None)
-        results.append({
-            "path": relative(path),
-            "bytes": path.stat().st_size,
-            "video_upload_resource_name": response.resource_name,
-            "state": "UPLOADING_OR_PROCESSING",
-        })
+        results.append({"path": relative(path), "bytes": path.stat().st_size, "video_upload_resource_name": response.resource_name, "state": "UPLOADING_OR_PROCESSING"})
     return results
 
 
@@ -197,22 +199,12 @@ def video_upload_status(client: GoogleAdsClient, cid: str, resource_names: list[
     if not resource_names:
         return []
     quoted = ", ".join("'" + x.replace("'", "\\'") + "'" for x in resource_names)
-    query = f"""
-        SELECT you_tube_video_upload.resource_name,
-               you_tube_video_upload.video_id,
-               you_tube_video_upload.state
-        FROM you_tube_video_upload
-        WHERE you_tube_video_upload.resource_name IN ({quoted})
-    """
+    query = f"""SELECT you_tube_video_upload.resource_name, you_tube_video_upload.video_id, you_tube_video_upload.state FROM you_tube_video_upload WHERE you_tube_video_upload.resource_name IN ({quoted})"""
     rows = client.get_service("GoogleAdsService").search(customer_id=cid, query=query)
     out = []
     for row in rows:
         upload = row.you_tube_video_upload
-        out.append({
-            "video_upload_resource_name": upload.resource_name,
-            "video_id": upload.video_id,
-            "state": upload.state.name,
-        })
+        out.append({"video_upload_resource_name": upload.resource_name, "video_id": upload.video_id, "state": upload.state.name})
     return out
 
 
@@ -229,7 +221,6 @@ def finalize_video_assets(client: GoogleAdsClient, request: dict[str, Any]) -> d
     missing = [x for x in names if x not in by_name]
     if missing:
         raise RuntimeError(f"Video upload resource not found: {missing[0]}")
-
     service = client.get_service("AssetService")
     operations = []
     ready = []
@@ -245,22 +236,14 @@ def finalize_video_assets(client: GoogleAdsClient, request: dict[str, Any]) -> d
         asset.youtube_video_asset.youtube_video_id = item["video_id"]
         operations.append(op)
         ready.append(item)
-
     if not operations:
         return {"customer_id": cid, "created_video_assets": [], "pending": pending}
-
     response = service.mutate_assets(customer_id=cid, operations=operations)
-    created = []
-    for item, result in zip(ready, response.results):
-        created.append({**item, "asset_resource_name": result.resource_name})
+    created = [{**item, "asset_resource_name": result.resource_name} for item, result in zip(ready, response.results)]
     return {"customer_id": cid, "created_video_assets": created, "pending": pending}
 
 
-OPERATIONS = {
-    "inspect_repo_media": inspect_repo_media,
-    "upload_media_assets": upload_media_assets,
-    "finalize_video_assets": finalize_video_assets,
-}
+OPERATIONS = {"inspect_repo_media": inspect_repo_media, "upload_media_assets": upload_media_assets, "finalize_video_assets": finalize_video_assets}
 
 
 def main() -> None:
