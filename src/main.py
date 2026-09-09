@@ -8,6 +8,19 @@ from google.ads.googleads.client import GoogleAdsClient
 from google.api_core import protobuf_helpers
 
 
+LOCATION_IDS = {
+    "United States": "2840",
+    "United Kingdom": "2826",
+    "Canada": "2124",
+    "Australia": "2036",
+    "New Zealand": "2554",
+}
+
+LANGUAGE_IDS = {
+    "English": "1000",
+}
+
+
 def clean_id(value: str | int) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
@@ -143,6 +156,7 @@ def conversion_action_rows(client: GoogleAdsClient, cid: str) -> list[dict[str, 
         ca = row.conversion_action
         out.append({
             "id": str(ca.id),
+            "resource_name": ca.resource_name,
             "name": ca.name,
             "status": ca.status.name,
             "type": ca.type_.name,
@@ -194,6 +208,21 @@ def event_match(action: dict[str, Any], wanted: str) -> bool:
         action.get("ga4", {}).get("event_name", ""),
     ]
     return any(str(x).strip().lower() == wanted for x in candidates if x)
+
+
+def resolve_conversion_action(client: GoogleAdsClient, cid: str, event_name: str) -> str:
+    matches = [a for a in conversion_action_rows(client, cid) if event_match(a, event_name)]
+    enabled = [a for a in matches if a["status"] == "ENABLED"]
+    pool = enabled or matches
+    if not pool:
+        raise RuntimeError(f"No Google Ads conversion action found for event '{event_name}'.")
+    if len(pool) > 1:
+        primary = [a for a in pool if a["primary_for_goal"]]
+        if len(primary) == 1:
+            pool = primary
+        else:
+            raise RuntimeError(f"Multiple conversion actions match '{event_name}'; specify conversion_action_resource_name.")
+    return pool[0]["resource_name"]
 
 
 def measurement_inspection(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
@@ -259,6 +288,45 @@ def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[st
     return {"customer_id": cid, "days": days, "currency": currency, "campaigns": out}
 
 
+def normalized_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(x) for x in value]
+
+
+def validate_text_assets(headlines: list[str], descriptions: list[str]) -> None:
+    if not headlines or not descriptions:
+        raise RuntimeError("A complete App ad requires at least one headline and one description.")
+    if len(headlines) > 5 or len(descriptions) > 5:
+        raise RuntimeError("App ad text is limited to at most 5 headlines and 5 descriptions in this wrapper.")
+    too_long_headlines = [x for x in headlines if len(x) > 30]
+    too_long_descriptions = [x for x in descriptions if len(x) > 90]
+    if too_long_headlines:
+        raise RuntimeError(f"Headline exceeds 30 characters: {too_long_headlines[0]}")
+    if too_long_descriptions:
+        raise RuntimeError(f"Description exceeds 90 characters: {too_long_descriptions[0]}")
+
+
+def text_asset(client: GoogleAdsClient, value: str):
+    asset = client.get_type("AdTextAsset")
+    asset.text = value
+    return asset
+
+
+def image_asset(client: GoogleAdsClient, resource_name: str):
+    asset = client.get_type("AdImageAsset")
+    asset.asset = resource_name
+    return asset
+
+
+def video_asset(client: GoogleAdsClient, resource_name: str):
+    asset = client.get_type("AdVideoAsset")
+    asset.asset = resource_name
+    return asset
+
+
 def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
     cid = assert_allowed(request["customer_id"])
     currency, limit = write_currency_guard(client, cid)
@@ -266,25 +334,53 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
     check_budget_limit(daily_budget_amount, limit, currency)
     validate_only = bool(request.get("validate_only", True))
 
+    target_locations = normalized_list(request.get("target_locations"))
+    target_languages = normalized_list(request.get("target_languages") or request.get("target_language"))
+    headlines = normalized_list(request.get("headlines"))
+    descriptions = normalized_list(request.get("descriptions"))
+    image_resources = normalized_list(request.get("image_asset_resource_names"))
+    video_resources = normalized_list(request.get("youtube_video_asset_resource_names"))
+    validate_text_assets(headlines, descriptions)
+
+    unknown_locations = [x for x in target_locations if x not in LOCATION_IDS]
+    if unknown_locations:
+        raise RuntimeError(f"Unsupported target location(s): {', '.join(unknown_locations)}")
+    unknown_languages = [x for x in target_languages if x not in LANGUAGE_IDS]
+    if unknown_languages:
+        raise RuntimeError(f"Unsupported target language(s): {', '.join(unknown_languages)}")
+    if not target_locations:
+        raise RuntimeError("At least one target location is required to avoid accidental worldwide targeting.")
+    if not target_languages:
+        raise RuntimeError("At least one target language is required.")
+
+    conversion_action_resource = request.get("conversion_action_resource_name")
+    optimization_goal_event = request.get("optimization_goal_event") or request.get("optimization_goal")
+    if not conversion_action_resource and optimization_goal_event:
+        conversion_action_resource = resolve_conversion_action(client, cid, str(optimization_goal_event))
+
     budget_service = client.get_service("CampaignBudgetService")
     campaign_service = client.get_service("CampaignService")
+    ad_group_service = client.get_service("AdGroupService")
+    geo_service = client.get_service("GeoTargetConstantService")
     google_ads_service = client.get_service("GoogleAdsService")
 
     budget_resource = budget_service.campaign_budget_path(cid, -1)
     campaign_resource = campaign_service.campaign_path(cid, -2)
+    ad_group_resource = ad_group_service.ad_group_path(cid, -3)
+
+    operations = []
 
     budget_mutate = client.get_type("MutateOperation")
-    budget_op = budget_mutate.campaign_budget_operation
-    budget = budget_op.create
+    budget = budget_mutate.campaign_budget_operation.create
     budget.resource_name = budget_resource
     budget.name = f"{request['name']} budget"
     budget.amount_micros = amount_to_micros(daily_budget_amount)
     budget.explicitly_shared = False
     budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+    operations.append(budget_mutate)
 
     campaign_mutate = client.get_type("MutateOperation")
-    campaign_op = campaign_mutate.campaign_operation
-    campaign = campaign_op.create
+    campaign = campaign_mutate.campaign_operation.create
     campaign.resource_name = campaign_resource
     campaign.name = request["name"]
     campaign.status = client.enums.CampaignStatusEnum.PAUSED
@@ -307,12 +403,68 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
         campaign.app_campaign_setting.bidding_strategy_goal_type = client.enums.AppCampaignBiddingStrategyGoalTypeEnum.OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST
         campaign.maximize_conversions = client.get_type("MaximizeConversions")
 
+    if conversion_action_resource:
+        campaign.selective_optimization.conversion_actions.append(conversion_action_resource)
+    operations.append(campaign_mutate)
+
+    for location_name in target_locations:
+        criterion_mutate = client.get_type("MutateOperation")
+        criterion = criterion_mutate.campaign_criterion_operation.create
+        criterion.campaign = campaign_resource
+        criterion.location.geo_target_constant = geo_service.geo_target_constant_path(LOCATION_IDS[location_name])
+        operations.append(criterion_mutate)
+
+    for language_name in target_languages:
+        criterion_mutate = client.get_type("MutateOperation")
+        criterion = criterion_mutate.campaign_criterion_operation.create
+        criterion.campaign = campaign_resource
+        criterion.language.language_constant = google_ads_service.language_constant_path(LANGUAGE_IDS[language_name])
+        operations.append(criterion_mutate)
+
+    ad_group_mutate = client.get_type("MutateOperation")
+    ad_group = ad_group_mutate.ad_group_operation.create
+    ad_group.resource_name = ad_group_resource
+    ad_group.name = request.get("ad_group_name") or f"{request['name']} | Ad Group 1"
+    ad_group.status = client.enums.AdGroupStatusEnum.ENABLED
+    ad_group.campaign = campaign_resource
+    operations.append(ad_group_mutate)
+
+    ad_mutate = client.get_type("MutateOperation")
+    ad_group_ad = ad_mutate.ad_group_ad_operation.create
+    ad_group_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
+    ad_group_ad.ad_group = ad_group_resource
+    ad_group_ad.ad.app_ad.headlines.extend([text_asset(client, x) for x in headlines])
+    ad_group_ad.ad.app_ad.descriptions.extend([text_asset(client, x) for x in descriptions])
+    if image_resources:
+        ad_group_ad.ad.app_ad.images.extend([image_asset(client, x) for x in image_resources])
+    if video_resources:
+        ad_group_ad.ad.app_ad.youtube_videos.extend([video_asset(client, x) for x in video_resources])
+    operations.append(ad_mutate)
+
     mutate_request = client.get_type("MutateGoogleAdsRequest")
     mutate_request.customer_id = cid
-    mutate_request.mutate_operations.extend([budget_mutate, campaign_mutate])
+    mutate_request.mutate_operations.extend(operations)
     mutate_request.partial_failure = False
     mutate_request.validate_only = validate_only
     response = google_ads_service.mutate(request=mutate_request)
+
+    manifest = {
+        "campaign": request["name"],
+        "budget": {"amount": daily_budget_amount, "currency": currency},
+        "status": "PAUSED",
+        "locations": target_locations,
+        "languages": target_languages,
+        "optimization_goal_event": optimization_goal_event,
+        "conversion_action_resource_name": conversion_action_resource,
+        "ad_group": request.get("ad_group_name") or f"{request['name']} | Ad Group 1",
+        "creative": {
+            "headlines": headlines,
+            "descriptions": descriptions,
+            "image_asset_resource_names": image_resources,
+            "youtube_video_asset_resource_names": video_resources,
+        },
+        "operation_count": len(operations),
+    }
 
     if validate_only:
         return {
@@ -320,23 +472,21 @@ def create_app_campaign_draft(client: GoogleAdsClient, request: dict[str, Any]) 
             "created": False,
             "operation": "create_app_campaign_draft",
             "customer_id": cid,
-            "name": request["name"],
-            "app_id": request["app_id"],
-            "daily_budget_amount": daily_budget_amount,
-            "currency": currency,
-            "status": "PAUSED",
-            "note": "Budget and campaign core validated atomically. No Google Ads resources were created.",
+            "manifest": manifest,
+            "note": "Complete App campaign structure validated atomically. No Google Ads resources were created.",
         }
 
-    created_budget = response.mutate_operation_responses[0].campaign_budget_result.resource_name
-    created_campaign = response.mutate_operation_responses[1].campaign_result.resource_name
+    responses = response.mutate_operation_responses
     return {
         "validated": False,
         "created": True,
         "customer_id": cid,
-        "currency": currency,
-        "campaign_resource_name": created_campaign,
-        "budget_resource_name": created_budget,
+        "manifest": manifest,
+        "budget_resource_name": responses[0].campaign_budget_result.resource_name,
+        "campaign_resource_name": responses[1].campaign_result.resource_name,
+        "ad_group_resource_name": next(
+            x.ad_group_result.resource_name for x in responses if x.ad_group_result.resource_name
+        ),
         "status": "PAUSED",
     }
 
