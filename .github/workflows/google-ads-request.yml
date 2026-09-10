@@ -72,6 +72,8 @@ jobs:
               python src/conversion_breakdown.py "$request" "results/${base}.result.json"
             elif [ "$operation" = "app_campaign_report" ]; then
               python src/app_campaign_report.py "$request" "results/${base}.result.json"
+            elif [ "$operation" = "campaign_goal_inspection" ]; then
+              python src/campaign_goal_inspection.py "$request" "results/${base}.result.json"
             else
               python src/main.py "$request" "results/${base}.result.json"
             fi
