@@ -67,7 +67,12 @@ jobs:
             esac
             test -f "$request"
             base="$(basename "$request" .json)"
-            python src/main.py "$request" "results/${base}.result.json"
+            operation="$(python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("operation", ""))' "$request")"
+            if [ "$operation" = "conversion_breakdown" ]; then
+              python src/conversion_breakdown.py "$request" "results/${base}.result.json"
+            else
+              python src/main.py "$request" "results/${base}.result.json"
+            fi
           done < /tmp/request-files.txt
 
       - name: Upload results
