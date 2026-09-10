@@ -1,8 +1,10 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from google.ads.googleads.client import GoogleAdsClient
 from google.api_core import protobuf_helpers
@@ -87,6 +89,44 @@ def get_customer_info(client: GoogleAdsClient, customer_id: str) -> dict[str, An
         "manager": bool(customer.manager),
         "test_account": bool(customer.test_account),
     }
+
+
+def report_date_window(customer_info: dict[str, Any], request: dict[str, Any], default_days: int = 7) -> tuple[str, str, str]:
+    """Return an inclusive GAQL date clause using the Google Ads account timezone.
+
+    Google Ads predefined ranges such as LAST_7_DAYS exclude the current day. That
+    caused same-day App campaign spend to appear as zero in our reports. Explicit
+    BETWEEN dates keep the API result aligned with the Google Ads UI.
+    """
+    tz_name = str(customer_info.get("time_zone") or "UTC")
+    try:
+        today = datetime.now(ZoneInfo(tz_name)).date()
+    except Exception:
+        today = datetime.now(ZoneInfo("UTC")).date()
+        tz_name = "UTC"
+
+    if request.get("start_date") or request.get("end_date"):
+        if not request.get("start_date") or not request.get("end_date"):
+            raise RuntimeError("start_date and end_date must be provided together in YYYY-MM-DD format.")
+        start = str(request["start_date"])
+        end = str(request["end_date"])
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise RuntimeError("start_date and end_date must use YYYY-MM-DD format.") from exc
+        if start_date > end_date:
+            raise RuntimeError("start_date must be on or before end_date.")
+    else:
+        days = int(request.get("days", default_days))
+        if days < 1 or days > 3650:
+            raise RuntimeError("days must be between 1 and 3650.")
+        end_date = today
+        start_date = today - timedelta(days=days - 1)
+        start = start_date.isoformat()
+        end = end_date.isoformat()
+
+    return f"segments.date BETWEEN '{start}' AND '{end}'", start, end
 
 
 def write_currency_guard(client: GoogleAdsClient, customer_id: str) -> tuple[str, float]:
@@ -260,14 +300,16 @@ def account_preflight(client: GoogleAdsClient, request: dict[str, Any]) -> dict[
 
 def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
     cid = clean_id(request["customer_id"])
-    days = int(request.get("days", 30))
-    currency = get_customer_info(client, cid)["currency"]
+    info = get_customer_info(client, cid)
+    currency = info["currency"]
+    date_clause, start_date, end_date = report_date_window(info, request, default_days=30)
     query = f"""
         SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type,
-               metrics.cost_micros, metrics.conversions, metrics.conversions_value,
+               metrics.impressions, metrics.clicks, metrics.cost_micros,
+               metrics.conversions, metrics.conversions_value,
                metrics.all_conversions, metrics.all_conversions_value
         FROM campaign
-        WHERE segments.date DURING LAST_{days}_DAYS
+        WHERE {date_clause}
         ORDER BY metrics.cost_micros DESC
     """
     rows = client.get_service("GoogleAdsService").search(customer_id=cid, query=query)
@@ -278,6 +320,8 @@ def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[st
             "name": row.campaign.name,
             "status": row.campaign.status.name,
             "channel": row.campaign.advertising_channel_type.name,
+            "impressions": int(row.metrics.impressions),
+            "clicks": int(row.metrics.clicks),
             "cost_amount": row.metrics.cost_micros / 1_000_000,
             "currency": currency,
             "conversions": float(row.metrics.conversions),
@@ -285,13 +329,22 @@ def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[st
             "all_conversions": float(row.metrics.all_conversions),
             "all_conversion_value": float(row.metrics.all_conversions_value),
         })
-    return {"customer_id": cid, "days": days, "currency": currency, "campaigns": out}
+    return {
+        "customer_id": cid,
+        "start_date": start_date,
+        "end_date": end_date,
+        "time_zone": info["time_zone"],
+        "currency": currency,
+        "campaigns": out,
+    }
 
 
 def delivery_diagnostic(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
     cid = clean_id(request["customer_id"])
     campaign_id = clean_id(request["campaign_id"])
-    currency = get_customer_info(client, cid)["currency"]
+    info = get_customer_info(client, cid)
+    currency = info["currency"]
+    date_clause, start_date, end_date = report_date_window(info, request, default_days=7)
     service = client.get_service("GoogleAdsService")
 
     campaign_rows = list(service.search(customer_id=cid, query=f"""
@@ -301,7 +354,7 @@ def delivery_diagnostic(client: GoogleAdsClient, request: dict[str, Any]) -> dic
                metrics.conversions, metrics.all_conversions
         FROM campaign
         WHERE campaign.id = {campaign_id}
-          AND segments.date DURING LAST_7_DAYS
+          AND {date_clause}
     """))
 
     ad_group_rows = list(service.search(customer_id=cid, query=f"""
@@ -311,7 +364,7 @@ def delivery_diagnostic(client: GoogleAdsClient, request: dict[str, Any]) -> dic
                metrics.conversions, metrics.all_conversions
         FROM ad_group
         WHERE campaign.id = {campaign_id}
-          AND segments.date DURING LAST_7_DAYS
+          AND {date_clause}
         ORDER BY ad_group.id
     """))
 
@@ -323,13 +376,16 @@ def delivery_diagnostic(client: GoogleAdsClient, request: dict[str, Any]) -> dic
                metrics.impressions, metrics.clicks, metrics.cost_micros
         FROM ad_group_ad
         WHERE campaign.id = {campaign_id}
-          AND segments.date DURING LAST_7_DAYS
+          AND {date_clause}
         ORDER BY ad_group.id, ad_group_ad.ad.id
     """))
 
     return {
         "customer_id": cid,
         "campaign_id": campaign_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "time_zone": info["time_zone"],
         "currency": currency,
         "campaign": [{
             "id": str(r.campaign.id),
