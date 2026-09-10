@@ -288,6 +288,87 @@ def campaign_report(client: GoogleAdsClient, request: dict[str, Any]) -> dict[st
     return {"customer_id": cid, "days": days, "currency": currency, "campaigns": out}
 
 
+def delivery_diagnostic(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
+    cid = clean_id(request["customer_id"])
+    campaign_id = clean_id(request["campaign_id"])
+    currency = get_customer_info(client, cid)["currency"]
+    service = client.get_service("GoogleAdsService")
+
+    campaign_rows = list(service.search(customer_id=cid, query=f"""
+        SELECT campaign.id, campaign.name, campaign.status, campaign.primary_status,
+               campaign.primary_status_reasons, campaign.advertising_channel_type,
+               metrics.impressions, metrics.clicks, metrics.cost_micros,
+               metrics.conversions, metrics.all_conversions
+        FROM campaign
+        WHERE campaign.id = {campaign_id}
+          AND segments.date DURING LAST_7_DAYS
+    """))
+
+    ad_group_rows = list(service.search(customer_id=cid, query=f"""
+        SELECT ad_group.id, ad_group.name, ad_group.status, ad_group.primary_status,
+               ad_group.primary_status_reasons,
+               metrics.impressions, metrics.clicks, metrics.cost_micros,
+               metrics.conversions, metrics.all_conversions
+        FROM ad_group
+        WHERE campaign.id = {campaign_id}
+          AND segments.date DURING LAST_7_DAYS
+        ORDER BY ad_group.id
+    """))
+
+    ad_rows = list(service.search(customer_id=cid, query=f"""
+        SELECT ad_group.id, ad_group.name,
+               ad_group_ad.ad.id, ad_group_ad.status,
+               ad_group_ad.policy_summary.approval_status,
+               ad_group_ad.policy_summary.review_status,
+               metrics.impressions, metrics.clicks, metrics.cost_micros
+        FROM ad_group_ad
+        WHERE campaign.id = {campaign_id}
+          AND segments.date DURING LAST_7_DAYS
+        ORDER BY ad_group.id, ad_group_ad.ad.id
+    """))
+
+    return {
+        "customer_id": cid,
+        "campaign_id": campaign_id,
+        "currency": currency,
+        "campaign": [{
+            "id": str(r.campaign.id),
+            "name": r.campaign.name,
+            "status": r.campaign.status.name,
+            "primary_status": r.campaign.primary_status.name,
+            "primary_status_reasons": [x.name for x in r.campaign.primary_status_reasons],
+            "impressions": int(r.metrics.impressions),
+            "clicks": int(r.metrics.clicks),
+            "cost_amount": r.metrics.cost_micros / 1_000_000,
+            "conversions": float(r.metrics.conversions),
+            "all_conversions": float(r.metrics.all_conversions),
+        } for r in campaign_rows],
+        "ad_groups": [{
+            "id": str(r.ad_group.id),
+            "name": r.ad_group.name,
+            "status": r.ad_group.status.name,
+            "primary_status": r.ad_group.primary_status.name,
+            "primary_status_reasons": [x.name for x in r.ad_group.primary_status_reasons],
+            "impressions": int(r.metrics.impressions),
+            "clicks": int(r.metrics.clicks),
+            "cost_amount": r.metrics.cost_micros / 1_000_000,
+            "conversions": float(r.metrics.conversions),
+            "all_conversions": float(r.metrics.all_conversions),
+        } for r in ad_group_rows],
+        "ads": [{
+            "ad_group_id": str(r.ad_group.id),
+            "ad_group_name": r.ad_group.name,
+            "ad_id": str(r.ad_group_ad.ad.id),
+            "status": r.ad_group_ad.status.name,
+            "approval_status": r.ad_group_ad.policy_summary.approval_status.name,
+            "review_status": r.ad_group_ad.policy_summary.review_status.name,
+            "impressions": int(r.metrics.impressions),
+            "clicks": int(r.metrics.clicks),
+            "cost_amount": r.metrics.cost_micros / 1_000_000,
+        } for r in ad_rows],
+    }
+
+
 def normalized_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -501,6 +582,8 @@ def update_campaign_daily_budget(client: GoogleAdsClient, request: dict[str, Any
     op = client.get_type("CampaignBudgetOperation")
     op.update.resource_name = request["budget_resource_name"]
     op.update.amount_micros = amount_to_micros(amount)
+    op.update.explicitly_shared = False
+    op.update.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
     op.update_mask.CopyFrom(protobuf_helpers.field_mask(None, op.update._pb))
     mutate_request = client.get_type("MutateCampaignBudgetsRequest")
     mutate_request.customer_id = cid
@@ -535,6 +618,7 @@ OPERATIONS = {
     "account_preflight": account_preflight,
     "measurement_inspection": measurement_inspection,
     "campaign_report": campaign_report,
+    "delivery_diagnostic": delivery_diagnostic,
     "create_app_campaign_draft": create_app_campaign_draft,
     "update_campaign_daily_budget": update_campaign_daily_budget,
     "set_campaign_status": set_campaign_status,
