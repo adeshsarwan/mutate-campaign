@@ -29,6 +29,11 @@ jobs:
       GOOGLE_ADS_ALLOWED_CUSTOMER_IDS: ${{ vars.GOOGLE_ADS_ALLOWED_CUSTOMER_IDS }}
       GOOGLE_ADS_EXPECTED_CURRENCY: ${{ vars.GOOGLE_ADS_EXPECTED_CURRENCY }}
       GOOGLE_ADS_MAX_DAILY_BUDGET: ${{ vars.GOOGLE_ADS_MAX_DAILY_BUDGET }}
+      ADMOB_CLIENT_ID: ${{ secrets.ADMOB_CLIENT_ID }}
+      ADMOB_CLIENT_SECRET: ${{ secrets.ADMOB_CLIENT_SECRET }}
+      ADMOB_REFRESH_TOKEN: ${{ secrets.ADMOB_REFRESH_TOKEN }}
+      ADMOB_PUBLISHER_ID: ${{ vars.ADMOB_PUBLISHER_ID }}
+      ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +79,8 @@ jobs:
               python src/app_campaign_report.py "$request" "results/${base}.result.json"
             elif [ "$operation" = "campaign_goal_inspection" ]; then
               python src/campaign_goal_inspection.py "$request" "results/${base}.result.json"
+            elif [ "$operation" = "admob_report" ]; then
+              python src/admob_report.py "$request" "results/${base}.result.json"
             else
               python src/main.py "$request" "results/${base}.result.json"
             fi
