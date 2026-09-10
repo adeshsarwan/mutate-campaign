@@ -81,6 +81,8 @@ jobs:
               python src/campaign_goal_inspection.py "$request" "results/${base}.result.json"
             elif [ "$operation" = "admob_report" ]; then
               python src/admob_report.py "$request" "results/${base}.result.json"
+            elif [ "$operation" = "combined_roi_report" ]; then
+              python src/combined_roi_report.py "$request" "results/${base}.result.json"
             else
               python src/main.py "$request" "results/${base}.result.json"
             fi
