@@ -83,6 +83,8 @@ jobs:
               python src/admob_report.py "$request" "results/${base}.result.json"
             elif [ "$operation" = "combined_roi_report" ]; then
               python src/combined_roi_report.py "$request" "results/${base}.result.json"
+            elif [ "$operation" = "campaign_demographic_report" ]; then
+              python src/campaign_demographic_report.py "$request" "results/${base}.result.json"
             else
               python src/main.py "$request" "results/${base}.result.json"
             fi
