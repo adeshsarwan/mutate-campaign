@@ -669,6 +669,29 @@ def set_campaign_status(client: GoogleAdsClient, request: dict[str, Any]) -> dic
     return {"validated": validate_only, "status": status, "currency_guard": currency}
 
 
+def set_campaign_end_date(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
+    cid = assert_allowed(request["customer_id"])
+    currency, _ = write_currency_guard(client, cid)
+    campaign_resource_name = request["campaign_resource_name"]
+    end_date = str(request["end_date"])
+    try:
+        datetime.strptime(end_date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise RuntimeError("end_date must use YYYY-MM-DD format.") from exc
+    validate_only = bool(request.get("validate_only", True))
+    service = client.get_service("CampaignService")
+    op = client.get_type("CampaignOperation")
+    op.update.resource_name = campaign_resource_name
+    op.update.end_date = end_date.replace("-", "")
+    op.update_mask.CopyFrom(protobuf_helpers.field_mask(None, op.update._pb))
+    mutate_request = client.get_type("MutateCampaignsRequest")
+    mutate_request.customer_id = cid
+    mutate_request.operations.append(op)
+    mutate_request.validate_only = validate_only
+    service.mutate_campaigns(request=mutate_request)
+    return {"validated": validate_only, "end_date": end_date, "currency_guard": currency}
+
+
 def enforce_campaign_lifetime_spend_cap(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
     """Pause a campaign once cumulative spend reaches the configured lifetime cap.
 
@@ -756,6 +779,7 @@ OPERATIONS = {
     "create_app_campaign_draft": create_app_campaign_draft,
     "update_campaign_daily_budget": update_campaign_daily_budget,
     "set_campaign_status": set_campaign_status,
+    "set_campaign_end_date": set_campaign_end_date,
     "enforce_campaign_lifetime_spend_cap": enforce_campaign_lifetime_spend_cap,
 }
 
