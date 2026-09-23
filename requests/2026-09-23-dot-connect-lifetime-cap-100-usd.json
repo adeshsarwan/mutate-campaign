@@ -1,0 +1,9 @@
+{
+  "operation": "enforce_campaign_lifetime_spend_cap",
+  "customer_id": "8130408947",
+  "campaign_id": "24233136440",
+  "campaign_resource_name": "customers/8130408947/campaigns/24233136440",
+  "start_date": "2026-09-09",
+  "lifetime_cap_usd": 100,
+  "usd_to_ads_currency": 17569.6
+}
