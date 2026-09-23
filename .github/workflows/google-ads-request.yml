@@ -34,6 +34,12 @@ jobs:
       ADMOB_REFRESH_TOKEN: ${{ secrets.ADMOB_REFRESH_TOKEN }}
       ADMOB_PUBLISHER_ID: ${{ vars.ADMOB_PUBLISHER_ID }}
       ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID }}
+      GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+      BIGQUERY_PROJECT_ID: ${{ vars.BIGQUERY_PROJECT_ID }}
+      BIGQUERY_DATASET: ${{ vars.BIGQUERY_DATASET }}
+      BIGQUERY_LOCATION: ${{ vars.BIGQUERY_LOCATION }}
+      GA4_CAMPAIGN_NAME: ${{ vars.GA4_CAMPAIGN_NAME }}
+      USD_TO_ADS_CURRENCY: ${{ vars.USD_TO_ADS_CURRENCY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +91,8 @@ jobs:
               python src/combined_roi_report.py "$request" "results/${base}.result.json"
             elif [ "$operation" = "campaign_demographic_report" ]; then
               python src/campaign_demographic_report.py "$request" "results/${base}.result.json"
+            elif [ "$operation" = "cohort_ltv_report" ]; then
+              python src/cohort_ltv_report.py "$request" "results/${base}.result.json"
             else
               python src/main.py "$request" "results/${base}.result.json"
             fi
