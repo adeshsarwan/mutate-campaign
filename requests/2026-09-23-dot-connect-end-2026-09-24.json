@@ -1,0 +1,7 @@
+{
+  "operation": "set_campaign_end_date",
+  "customer_id": "8130408947",
+  "campaign_resource_name": "customers/8130408947/campaigns/24233136440",
+  "end_date": "2026-09-24",
+  "validate_only": false
+}
