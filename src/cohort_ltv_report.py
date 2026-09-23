@@ -93,10 +93,26 @@ def revenue_diagnostic(client: bigquery.Client, table_prefix: str, start: str, e
       COUNT(*) AS ad_impression_events,
       COUNTIF(event_value_in_usd IS NOT NULL AND event_value_in_usd != 0) AS top_level_value_events,
       SUM(COALESCE(event_value_in_usd, 0)) AS top_level_event_value_usd,
-      COUNTIF((SELECT COALESCE(ep.value.double_value, ep.value.float_value, CAST(ep.value.int_value AS FLOAT64))
-               FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) IS NOT NULL) AS param_value_events,
-      SUM(COALESCE((SELECT COALESCE(ep.value.double_value, ep.value.float_value, CAST(ep.value.int_value AS FLOAT64))
-                    FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1), 0)) AS param_value_sum,
+      COUNTIF((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) IS NOT NULL) AS param_int_value_events,
+      COUNTIF((SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) IS NOT NULL) AS param_double_value_events,
+      COUNTIF((SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) IS NOT NULL) AS param_float_value_events,
+      SUM(COALESCE(CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64), 0)) AS param_int_value_raw_sum,
+      SUM(COALESCE((SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1), 0)) AS param_double_value_sum,
+      SUM(COALESCE((SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1), 0)) AS param_float_value_sum,
+      SUM(
+        COALESCE(NULLIF(event_value_in_usd, 0),
+          CASE
+            WHEN UPPER(COALESCE((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1), 'USD')) = 'USD'
+            THEN COALESCE(
+              (SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+              (SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+              SAFE_DIVIDE(CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64), 1000000.0)
+            )
+            ELSE NULL
+          END,
+          0
+        )
+      ) AS normalized_revenue_usd,
       ARRAY_AGG(DISTINCT COALESCE(
         (SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1),
         '(null)'
@@ -132,18 +148,25 @@ def cohort_rows(
         event_name,
         traffic_source.name AS acquisition_campaign,
         event_value_in_usd,
-        (SELECT COALESCE(ep.value.double_value, ep.value.float_value, CAST(ep.value.int_value AS FLOAT64))
-         FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS param_value,
+        (SELECT ep.value.int_value
+         FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS param_value_int,
+        (SELECT ep.value.double_value
+         FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS param_value_double,
+        (SELECT ep.value.float_value
+         FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS param_value_float,
         (SELECT ep.value.string_value
          FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1) AS param_currency,
         COALESCE(
           NULLIF(event_value_in_usd, 0),
-          IF(
-            UPPER(COALESCE((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1), 'USD')) = 'USD',
-            (SELECT COALESCE(ep.value.double_value, ep.value.float_value, CAST(ep.value.int_value AS FLOAT64))
-             FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
-            NULL
-          ),
+          CASE
+            WHEN UPPER(COALESCE((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1), 'USD')) = 'USD'
+            THEN COALESCE(
+              (SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+              (SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+              SAFE_DIVIDE(CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64), 1000000.0)
+            )
+            ELSE NULL
+          END,
           0
         ) AS ad_revenue_value_usd
       FROM `{table_prefix}events_*`
@@ -198,17 +221,17 @@ def cohort_rows(
         SUM(IF(b.event_name = 'ad_impression' AND b.event_date BETWEEN a.acquisition_date AND @end_date,
                COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_total_usd,
         SUM(IF(b.event_name = 'ad_impression' AND DATE_DIFF(b.event_date, a.acquisition_date, DAY) BETWEEN 0 AND 0,
-               COALESCE(b.event_value_in_usd, 0), 0)) AS revenue_d0_usd,
+               COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_d0_usd,
         SUM(IF(b.event_name = 'ad_impression' AND DATE_DIFF(b.event_date, a.acquisition_date, DAY) BETWEEN 0 AND 1,
-               COALESCE(b.event_value_in_usd, 0), 0)) AS revenue_d1_usd,
+               COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_d1_usd,
         SUM(IF(b.event_name = 'ad_impression' AND DATE_DIFF(b.event_date, a.acquisition_date, DAY) BETWEEN 0 AND 3,
-               COALESCE(b.event_value_in_usd, 0), 0)) AS revenue_d3_usd,
+               COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_d3_usd,
         SUM(IF(b.event_name = 'ad_impression' AND DATE_DIFF(b.event_date, a.acquisition_date, DAY) BETWEEN 0 AND 7,
-               COALESCE(b.event_value_in_usd, 0), 0)) AS revenue_d7_usd,
+               COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_d7_usd,
         SUM(IF(b.event_name = 'ad_impression' AND DATE_DIFF(b.event_date, a.acquisition_date, DAY) BETWEEN 0 AND 14,
-               COALESCE(b.event_value_in_usd, 0), 0)) AS revenue_d14_usd,
+               COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_d14_usd,
         SUM(IF(b.event_name = 'ad_impression' AND DATE_DIFF(b.event_date, a.acquisition_date, DAY) BETWEEN 0 AND 30,
-               COALESCE(b.event_value_in_usd, 0), 0)) AS revenue_d30_usd
+               COALESCE(b.ad_revenue_value_usd, 0), 0)) AS revenue_d30_usd
       FROM acquired a
       LEFT JOIN base b
         ON b.user_pseudo_id = a.user_pseudo_id
@@ -483,7 +506,7 @@ def main() -> None:
             "acquired_user": "A GA4/Firebase user_pseudo_id whose first_open is attributed to the configured GA4 traffic_source.name.",
             "retained_dN": "An acquired user with session_start or user_engagement exactly N days after first_open.",
             "active_last_7d": "An acquired user with session_start or user_engagement during the final 7 calendar days of the report.",
-            "ltv": "Cumulative ad_impression revenue for the acquired cohort, preferring event_value_in_usd and falling back to event_params.value when currency is USD.",
+            "ltv": "Cumulative ad_impression revenue for the acquired cohort. Top-level event_value_in_usd is used when present; otherwise USD event_params.value is normalized by storage type (INT64 treated as micros, FLOAT/DOUBLE treated as currency units).",
             "cac": "Google Ads spend divided by GA4-attributed acquired users; Ads-reported install CAC is also included for reconciliation.",
         },
         "fx": {
