@@ -103,10 +103,13 @@ def revenue_diagnostic(client: bigquery.Client, table_prefix: str, start: str, e
         COALESCE(NULLIF(event_value_in_usd, 0),
           CASE
             WHEN UPPER(COALESCE((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1), 'USD')) = 'USD'
-            THEN COALESCE(
-              (SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
-              (SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
-              SAFE_DIVIDE(CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64), 1000000.0)
+            THEN SAFE_DIVIDE(
+              COALESCE(
+                (SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+                (SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+                CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64)
+              ),
+              1000000.0
             )
             ELSE NULL
           END,
@@ -160,10 +163,13 @@ def cohort_rows(
           NULLIF(event_value_in_usd, 0),
           CASE
             WHEN UPPER(COALESCE((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'currency' LIMIT 1), 'USD')) = 'USD'
-            THEN COALESCE(
-              (SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
-              (SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
-              SAFE_DIVIDE(CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64), 1000000.0)
+            THEN SAFE_DIVIDE(
+              COALESCE(
+                (SELECT ep.value.double_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+                (SELECT ep.value.float_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1),
+                CAST((SELECT ep.value.int_value FROM UNNEST(event_params) ep WHERE ep.key = 'value' LIMIT 1) AS FLOAT64)
+              ),
+              1000000.0
             )
             ELSE NULL
           END,
@@ -492,7 +498,10 @@ def main() -> None:
             "location": location,
             "source_table_pattern": "events_*",
         },
-        "revenue_diagnostic": revenue_diag,
+        "revenue_diagnostic": {
+            **revenue_diag,
+            "interpretation": "For this app, ad_impression event_params.value is AdMob paid-event value in micros even when BigQuery stores it as DOUBLE; normalized revenue divides it by 1,000,000."
+        },
         "attribution_diagnostic": {
             "matched_campaign_users": matched_users,
             "top_first_open_attribution_rows": breakdown,
@@ -506,7 +515,7 @@ def main() -> None:
             "acquired_user": "A GA4/Firebase user_pseudo_id whose first_open is attributed to the configured GA4 traffic_source.name.",
             "retained_dN": "An acquired user with session_start or user_engagement exactly N days after first_open.",
             "active_last_7d": "An acquired user with session_start or user_engagement during the final 7 calendar days of the report.",
-            "ltv": "Cumulative ad_impression revenue for the acquired cohort. Top-level event_value_in_usd is used when present; otherwise USD event_params.value is normalized by storage type (INT64 treated as micros, FLOAT/DOUBLE treated as currency units).",
+            "ltv": "Cumulative ad_impression revenue for the acquired cohort. Top-level event_value_in_usd is used when present; otherwise this app's AdMob paid-event event_params.value is treated as micros and divided by 1,000,000 when currency is USD.",
             "cac": "Google Ads spend divided by GA4-attributed acquired users; Ads-reported install CAC is also included for reconciliation.",
         },
         "fx": {
