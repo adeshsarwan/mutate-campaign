@@ -669,6 +669,84 @@ def set_campaign_status(client: GoogleAdsClient, request: dict[str, Any]) -> dic
     return {"validated": validate_only, "status": status, "currency_guard": currency}
 
 
+def enforce_campaign_lifetime_spend_cap(client: GoogleAdsClient, request: dict[str, Any]) -> dict[str, Any]:
+    """Pause a campaign once cumulative spend reaches the configured lifetime cap.
+
+    Google Ads App campaigns do not expose a strict native lifetime budget in the
+    same way a daily budget is exposed, so this guard checks cumulative campaign
+    cost and pauses the campaign when the threshold is reached.
+    """
+    cid = assert_allowed(request["customer_id"])
+    currency, _ = write_currency_guard(client, cid)
+    campaign_id = clean_id(request["campaign_id"])
+    campaign_resource_name = request.get("campaign_resource_name") or f"customers/{cid}/campaigns/{campaign_id}"
+    start_date = str(request["start_date"])
+    cap_usd = float(request["lifetime_cap_usd"])
+    if cap_usd <= 0:
+        raise RuntimeError("lifetime_cap_usd must be > 0")
+
+    fx_raw = request.get("usd_to_ads_currency") or os.getenv("USD_TO_ADS_CURRENCY")
+    if currency == "USD":
+        cap_account_currency = cap_usd
+        fx = 1.0
+    else:
+        if not fx_raw:
+            raise RuntimeError("USD_TO_ADS_CURRENCY is required for a USD lifetime cap on a non-USD account.")
+        fx = float(fx_raw)
+        cap_account_currency = cap_usd * fx
+
+    info = get_customer_info(client, cid)
+    try:
+        today = datetime.now(ZoneInfo(info["time_zone"] or "UTC")).date().isoformat()
+    except Exception:
+        today = datetime.now(ZoneInfo("UTC")).date().isoformat()
+
+    service = client.get_service("GoogleAdsService")
+    rows = list(service.search(customer_id=cid, query=f"""
+        SELECT campaign.id, campaign.name, campaign.status, metrics.cost_micros
+        FROM campaign
+        WHERE campaign.id = {campaign_id}
+          AND segments.date BETWEEN '{start_date}' AND '{today}'
+    """))
+    if not rows:
+        raise RuntimeError(f"Campaign {campaign_id} not found or has no report row in the requested period.")
+
+    row = rows[0]
+    spend_account_currency = float(row.metrics.cost_micros) / 1_000_000.0
+    spend_usd = spend_account_currency / fx
+    threshold_reached = spend_account_currency >= cap_account_currency
+    paused_now = False
+
+    if threshold_reached and row.campaign.status.name != "PAUSED":
+        op = client.get_type("CampaignOperation")
+        op.update.resource_name = campaign_resource_name
+        op.update.status = client.enums.CampaignStatusEnum.PAUSED
+        op.update_mask.CopyFrom(protobuf_helpers.field_mask(None, op.update._pb))
+        mutate_request = client.get_type("MutateCampaignsRequest")
+        mutate_request.customer_id = cid
+        mutate_request.operations.append(op)
+        mutate_request.validate_only = False
+        client.get_service("CampaignService").mutate_campaigns(request=mutate_request)
+        paused_now = True
+
+    return {
+        "campaign_id": campaign_id,
+        "campaign_name": row.campaign.name,
+        "campaign_status_before_check": row.campaign.status.name,
+        "start_date": start_date,
+        "through_date": today,
+        "currency": currency,
+        "usd_to_ads_currency": fx,
+        "lifetime_cap_usd": cap_usd,
+        "lifetime_cap_account_currency": cap_account_currency,
+        "spend_account_currency": spend_account_currency,
+        "spend_usd": spend_usd,
+        "remaining_usd_before_cap": max(0.0, cap_usd - spend_usd),
+        "threshold_reached": threshold_reached,
+        "paused_now": paused_now,
+    }
+
+
 OPERATIONS = {
     "list_accessible_customers": list_accessible_customers,
     "account_preflight": account_preflight,
@@ -678,6 +756,7 @@ OPERATIONS = {
     "create_app_campaign_draft": create_app_campaign_draft,
     "update_campaign_daily_budget": update_campaign_daily_budget,
     "set_campaign_status": set_campaign_status,
+    "enforce_campaign_lifetime_spend_cap": enforce_campaign_lifetime_spend_cap,
 }
 
 
