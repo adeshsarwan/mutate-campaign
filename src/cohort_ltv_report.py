@@ -213,7 +213,10 @@ def cohort_rows(
         MAX(IF(DATE_DIFF(act.event_date, a.acquisition_date, DAY) = 7, 1, 0)) AS d7,
         MAX(IF(DATE_DIFF(act.event_date, a.acquisition_date, DAY) = 14, 1, 0)) AS d14,
         MAX(IF(DATE_DIFF(act.event_date, a.acquisition_date, DAY) = 30, 1, 0)) AS d30,
-        MAX(IF(act.event_date BETWEEN DATE_SUB(@end_date, INTERVAL 6 DAY) AND @end_date, 1, 0)) AS active_last_7d
+        MAX(IF(act.event_date BETWEEN DATE_SUB(@end_date, INTERVAL 6 DAY) AND @end_date, 1, 0)) AS active_last_7d,
+        MAX(IF(act.event_date > a.acquisition_date, 1, 0)) AS returned_after_d0,
+        MAX(IF(act.event_date > a.acquisition_date
+               AND act.event_date BETWEEN DATE_SUB(@end_date, INTERVAL 6 DAY) AND @end_date, 1, 0)) AS returned_active_last_7d
       FROM acquired a
       LEFT JOIN activity act
         ON act.user_pseudo_id = a.user_pseudo_id
@@ -253,6 +256,8 @@ def cohort_rows(
       SUM(r.d14) AS d14_retained,
       SUM(r.d30) AS d30_retained,
       SUM(r.active_last_7d) AS active_last_7d,
+      SUM(r.returned_after_d0) AS returned_after_d0,
+      SUM(r.returned_active_last_7d) AS returned_active_last_7d,
       SUM(v.revenue_total_usd) AS cumulative_revenue_usd,
       SUM(v.revenue_d0_usd) AS revenue_d0_usd,
       SUM(v.revenue_d1_usd) AS revenue_d1_usd,
@@ -315,12 +320,14 @@ def google_ads_daily(request: dict[str, Any]) -> dict[str, Any]:
             "clicks": int(row.metrics.clicks),
             "spend_amount": float(row.metrics.cost_micros) / 1_000_000.0,
             "ads_reported_installs": 0.0,
+            "ads_installs_by_conversion_date": 0.0,
         }
 
     actions = conversion_actions(client, cid)
     install_rows = service.search(customer_id=cid, query=f"""
       SELECT segments.date, segments.conversion_action,
-             metrics.all_conversions
+             metrics.all_conversions,
+             metrics.all_conversions_by_conversion_date
       FROM campaign
       WHERE segments.date BETWEEN '{start}' AND '{end}'
         AND campaign.id = {campaign_id}
@@ -341,8 +348,10 @@ def google_ads_daily(request: dict[str, Any]) -> dict[str, Any]:
                 "clicks": 0,
                 "spend_amount": 0.0,
                 "ads_reported_installs": 0.0,
+                "ads_installs_by_conversion_date": 0.0,
             }
         daily[day]["ads_reported_installs"] += float(row.metrics.all_conversions)
+        daily[day]["ads_installs_by_conversion_date"] += float(row.metrics.all_conversions_by_conversion_date)
 
     return {
         "customer_id": cid,
@@ -406,9 +415,15 @@ def enrich_cohorts(
 def summarize(cohorts: list[dict[str, Any]], ads: dict[str, Any], usd_to_ads_currency: float | None) -> dict[str, Any]:
     users = sum(int(r["acquired_users"] or 0) for r in cohorts)
     active = sum(int(r["active_last_7d"] or 0) for r in cohorts)
+    returned = sum(int(r.get("returned_after_d0") or 0) for r in cohorts)
+    returned_active = sum(int(r.get("returned_active_last_7d") or 0) for r in cohorts)
     revenue = sum(float(r["cumulative_revenue_usd"] or 0) for r in cohorts)
-    spend = sum(float(r["google_ads_spend_amount"] or 0) for r in cohorts)
-    ads_installs = sum(float(r["ads_reported_installs"] or 0) for r in cohorts)
+
+    # Campaign economics must use every Google Ads day, including dates on which
+    # GA4 has zero matching first_open users.
+    spend = sum(float(r.get("spend_amount") or 0) for r in ads["daily"])
+    ads_installs = sum(float(r.get("ads_reported_installs") or 0) for r in ads["daily"])
+    ads_installs_by_conversion_date = sum(float(r.get("ads_installs_by_conversion_date") or 0) for r in ads["daily"])
 
     if ads["currency"] == "USD":
         spend_usd = spend
@@ -419,28 +434,64 @@ def summarize(cohorts: list[dict[str, Any]], ads: dict[str, Any], usd_to_ads_cur
 
     summary = {
         "ga4_attributed_acquired_users": users,
-        "active_users_last_7d": active,
-        "active_last_7d_rate": safe_div(active, users),
+        "google_ads_install_conversions_interaction_date": ads_installs,
+        "google_ads_install_conversions_conversion_date": ads_installs_by_conversion_date,
+        "ga4_vs_ads_conversion_date_user_gap": users - ads_installs_by_conversion_date,
+        "ga4_vs_ads_conversion_date_match_rate": safe_div(users, ads_installs_by_conversion_date),
+        "returned_after_acquisition_day_users": returned,
+        "returned_after_acquisition_day_rate": safe_div(returned, users),
+        "active_users_last_7d_any": active,
+        "active_last_7d_any_rate": safe_div(active, users),
+        "returned_and_active_last_7d_users": returned_active,
+        "returned_and_active_last_7d_rate": safe_div(returned_active, users),
         "cumulative_ad_revenue_usd": revenue,
         "ltv_per_ga4_user_usd": safe_div(revenue, users),
         "google_ads_spend_amount": spend,
         "google_ads_currency": ads["currency"],
         "google_ads_spend_usd": spend_usd,
-        "ads_reported_installs": ads_installs,
         "cac_per_ga4_user_ads_currency": safe_div(spend, users),
-        "cac_per_ads_install_ads_currency": safe_div(spend, ads_installs),
+        "cac_per_ads_install_ads_currency": safe_div(spend, ads_installs_by_conversion_date or ads_installs),
         "cac_per_ga4_user_usd": safe_div(spend_usd, users) if spend_usd is not None else None,
     }
     summary["ltv_cac_ratio"] = safe_div(summary["ltv_per_ga4_user_usd"], summary["cac_per_ga4_user_usd"]) if summary["cac_per_ga4_user_usd"] is not None else None
 
+    # Independent checkpoint populations. Useful for point estimates, but they
+    # should not be interpreted as a monotonic LTV curve because each checkpoint
+    # can contain a different set of matured cohorts.
     for d in (1, 3, 7, 14, 30):
-        eligible_users = sum(int(r["acquired_users"] or 0) for r in cohorts if r[f"d{d}_eligible"])
-        retained = sum(int(r.get(f"d{d}_retained") or 0) for r in cohorts if r[f"d{d}_eligible"])
-        checkpoint_revenue = sum(float(r.get(f"revenue_d{d}_usd") or 0) for r in cohorts if r[f"d{d}_eligible"])
+        eligible = [r for r in cohorts if r[f"d{d}_eligible"]]
+        eligible_users = sum(int(r["acquired_users"] or 0) for r in eligible)
+        retained = sum(int(r.get(f"d{d}_retained") or 0) for r in eligible)
+        checkpoint_revenue = sum(float(r.get(f"revenue_d{d}_usd") or 0) for r in eligible)
         summary[f"d{d}_eligible_users"] = eligible_users
         summary[f"d{d}_retained_users"] = retained
         summary[f"d{d}_retention_rate"] = safe_div(retained, eligible_users)
         summary[f"d{d}_ltv_per_user_usd"] = safe_div(checkpoint_revenue, eligible_users)
+
+    # Same-population curves: for each maturity horizon use only cohorts old
+    # enough to have reached that horizon, then show all earlier checkpoints on
+    # that identical user base. These curves should be non-decreasing for LTV.
+    curves = {}
+    checkpoints = (0, 1, 3, 7, 14, 30)
+    for horizon in (1, 3, 7, 14, 30):
+        matured = [r for r in cohorts if r["cohort_age_days"] >= horizon]
+        matured_users = sum(int(r["acquired_users"] or 0) for r in matured)
+        curve = {"users": matured_users}
+        for point in checkpoints:
+            if point > horizon:
+                continue
+            revenue_key = f"revenue_d{point}_usd"
+            curve[f"d{point}_ltv_per_user_usd"] = safe_div(
+                sum(float(r.get(revenue_key) or 0) for r in matured),
+                matured_users,
+            )
+            if point > 0:
+                curve[f"d{point}_retention_rate"] = safe_div(
+                    sum(int(r.get(f"d{point}_retained") or 0) for r in matured),
+                    matured_users,
+                )
+        curves[f"d{horizon}_matured_population"] = curve
+    summary["same_population_maturity_curves"] = curves
 
     return summary
 
@@ -482,6 +533,20 @@ def main() -> None:
     summary = summarize(cohorts, ads, fx)
 
     matched_users = summary["ga4_attributed_acquired_users"]
+    ga4_by_date = {r["acquisition_date"]: int(r["acquired_users"] or 0) for r in cohorts}
+    daily_reconciliation = []
+    for row in ads["daily"]:
+        day = row["date"]
+        ga4_users = ga4_by_date.get(day, 0)
+        conv_date_installs = float(row.get("ads_installs_by_conversion_date") or 0)
+        daily_reconciliation.append({
+            "date": day,
+            "ga4_paid_first_open_users": ga4_users,
+            "google_ads_installs_interaction_date": float(row.get("ads_reported_installs") or 0),
+            "google_ads_installs_conversion_date": conv_date_installs,
+            "ga4_minus_ads_conversion_date": ga4_users - conv_date_installs,
+        })
+
     result = {
         "ok": True,
         "operation": "cohort_ltv_report",
@@ -514,7 +579,9 @@ def main() -> None:
         "definitions": {
             "acquired_user": "A GA4/Firebase user_pseudo_id whose first_open is attributed to the configured GA4 traffic_source.name.",
             "retained_dN": "An acquired user with session_start or user_engagement exactly N days after first_open.",
-            "active_last_7d": "An acquired user with session_start or user_engagement during the final 7 calendar days of the report.",
+            "active_last_7d": "Any acquired user active during the final 7 calendar days; this can include acquisition-day activity for recent cohorts.",
+            "returned_after_acquisition_day": "An acquired user with session_start or user_engagement on a calendar date after first_open.",
+            "same_population_ltv_curve": "D0/D1/D3/D7/etc. cumulative LTV calculated on the identical set of cohorts matured to the selected horizon.",
             "ltv": "Cumulative ad_impression revenue for the acquired cohort. Top-level event_value_in_usd is used when present; otherwise this app's AdMob paid-event event_params.value is treated as micros and divided by 1,000,000 when currency is USD.",
             "cac": "Google Ads spend divided by GA4-attributed acquired users; Ads-reported install CAC is also included for reconciliation.",
         },
@@ -523,6 +590,7 @@ def main() -> None:
             "note": "Required for USD CAC and LTV:CAC when the Google Ads account currency is not USD.",
         },
         "summary": summary,
+        "daily_acquisition_reconciliation": daily_reconciliation,
         "cohorts": cohorts,
         "google_ads_daily": ads["daily"],
     }
