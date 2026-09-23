@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from google.cloud import bigquery
-from google.oauth2 import service_account
 
 from app_campaign_report import clean_id, conversion_actions, get_customer_info, is_install_action, load_client
 
@@ -43,13 +42,9 @@ def parse_date(value: str) -> str:
 
 
 def bigquery_client(project_id: str) -> bigquery.Client:
-    raw = required_env("GCP_SERVICE_ACCOUNT_JSON")
-    try:
-        info = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON is not valid JSON") from exc
-    credentials = service_account.Credentials.from_service_account_info(info)
-    return bigquery.Client(project=project_id, credentials=credentials)
+    # Authentication is provided by google-github-actions/auth via
+    # Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS).
+    return bigquery.Client(project=project_id)
 
 
 def campaign_breakdown(client: bigquery.Client, table_prefix: str, start: str, end: str, location: str) -> list[dict[str, Any]]:
